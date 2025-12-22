@@ -1,0 +1,40 @@
+---
+# Environment Configuration Tasks
+
+- name: Remove old WarehousePG/Greenplum references from .bashrc
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  lineinfile:
+    path: "{{ whpg_gpadmin_home }}/.bashrc"
+    state: absent
+    regexp: "{{ item }}"
+  loop:
+    - '.*whpg.*'
+    - '.*greenplum.*'
+
+- name: Add greenplum_path.sh to .bashrc
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  lineinfile:
+    path: "{{ whpg_gpadmin_home }}/.bashrc"
+    line: "source {{ whpg_install_path }}/greenplum_path.sh"
+    state: present
+    create: yes
+
+- name: Add COORDINATOR_DATA_DIRECTORY to .bashrc
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  lineinfile:
+    path: "{{ whpg_gpadmin_home }}/.bashrc"
+    line: "export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}"
+    state: present
+    create: yes
+
+- name: Update /etc/hosts with coordinator hostname
+  become: yes
+  lineinfile:
+    path: /etc/hosts
+    line: "{{ hostvars[inventory_hostname].private_ip }} {{ inventory_hostname }}"
+    state: present
+    regexp: "^{{ hostvars[inventory_hostname].private_ip }}.*{{ inventory_hostname }}"
+  when: hostvars[inventory_hostname].private_ip is defined

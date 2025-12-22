@@ -1,0 +1,9 @@
+{% if 'primary-segments' in group_names %}
+{% for host in groups['primary-segments'] %}
+{% if hostvars[host].coordinator == hostvars[inventory_hostname]['inventory_hostname'] | default(inventory_hostname) %}
+{{ host }}
+{% endif %}
+{% endfor %}
+{% else %}
+{{ inventory_hostname }}
+{% endif %}

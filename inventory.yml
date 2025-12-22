@@ -1,0 +1,39 @@
+---
+all:
+  children:
+    primary-coordinator:
+      hosts:
+        whpg1-coordinator:
+          ansible_host: 110.0.0.4
+          private_ip: 10.0.0.4
+    primary-segments:
+      hosts:
+        whpg-segment1:
+          ansible_host: 110.0.0.1
+          private_ip: 10.0.0.1
+          coordinator: whpg1-coordinator
+        whpg-segment2:
+          ansible_host: 110.0.0.2
+          private_ip: 10.0.0.2
+          coordinator: whpg1-coordinator
+    standby-coordinator:
+      hosts:
+        standby-coordinator:
+          ansible_host: 110.0.0.5
+          private_ip: 10.0.0.5
+          upstream_node_private_ip: whpg1-coordinator
+          replication_type: synchronous
+    standby-segments:
+      hosts:
+        standby-segments1:
+          ansible_host: 110.0.0.3
+          private_ip: 10.0.0.3
+          upstream_node_private_ip: whpg-segment1
+          replication_type: asynchronous
+          coordinator: standby-coordinator
+        standby-segments2:
+          ansible_host: 110.0.0.3
+          private_ip: 10.0.0.3
+          upstream_node_private_ip: whpg-segment2
+          coordinator: standby-coordinator
+          replication_type: asynchronous

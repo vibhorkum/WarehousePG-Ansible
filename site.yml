@@ -1,0 +1,46 @@
+---
+# Main playbook for WarehousePG installation and configuration
+
+- name: Install and Configure WarehousePG on Primary Coordinator
+  hosts: primary-coordinator
+  become: yes
+  vars:
+    edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"  # Replace with your actual token
+    whpg_gpadmin_password: "NewPassword@123"
+  roles:
+    - warehousepg
+  tags:
+    - primary-coordinator
+
+- name: Install and Configure WarehousePG on Primary Segments
+  hosts: primary-segments
+  become: yes
+  vars:
+    edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"  # Replace with your actual token
+    whpg_gpadmin_password: "NewPassword@123"
+  roles:
+    - warehousepg
+  tags:
+    - primary-segments
+
+- name: Install and Configure WarehousePG on Standby Coordinator
+  hosts: standby-coordinator
+  become: yes
+  vars:
+    edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"  # Replace with your actual token
+    whpg_gpadmin_password: "NewPassword@123"
+  roles:
+    - warehousepg
+  tags:
+    - standby-coordinator
+
+- name: Install and Configure WarehousePG on Standby Segments
+  hosts: standby-segments
+  become: yes
+  vars:
+    edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"  # Replace with your actual token
+    whpg_gpadmin_password: "NewPassword@123"
+  roles:
+    - warehousepg
+  tags:
+    - standby-segments

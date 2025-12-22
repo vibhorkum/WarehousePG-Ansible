@@ -1,0 +1,36 @@
+---
+# Remote Access Configuration Tasks
+
+- name: Configure pg_hba.conf for remote access
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  template:
+    src: pg_hba_additions.j2
+    dest: "{{ whpg_coordinator_data_directory }}/pg_hba_additions.conf"
+    owner: "{{ whpg_gpadmin_user }}"
+    group: "{{ whpg_gpadmin_user }}"
+    mode: '0644'
+
+- name: Add custom pg_hba entries to main pg_hba.conf
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  blockinfile:
+    path: "{{ whpg_coordinator_data_directory }}/pg_hba.conf"
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - Custom Access Rules"
+    block: |
+      # Allow all users from specific IP range using md5 password
+      host    all    all    {{ whpg_pg_hba_allowed_cidr }}    md5
+    backup: yes
+  notify: reload greenplum config
+
+- name: Reload WarehousePG configuration
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  shell: |
+    source {{ whpg_install_path }}/greenplum_path.sh
+    gpstop -u
+  args:
+    executable: /bin/bash
+  environment:
+    COORDINATOR_DATA_DIRECTORY: "{{ whpg_coordinator_data_directory }}"
+  changed_when: false

@@ -1,0 +1,5 @@
+# Ansible Vault encrypted variables
+# Create this file with: ansible-vault create group_vars/all/vault.yml
+
+edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"
+whpg_gpadmin_password: "NewPassword@123"

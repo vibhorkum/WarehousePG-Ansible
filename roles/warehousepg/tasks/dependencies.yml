@@ -1,0 +1,47 @@
+---
+# Dependency Installation Tasks
+
+- name: Enable CRB (CodeReady Builder) repository
+  become: yes
+  command: dnf config-manager --set-enabled crb
+  args:
+    warn: false
+  changed_when: false
+
+- name: Install EPEL repository
+  become: yes
+  dnf:
+    name: "https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm"
+    state: present
+    disable_gpg_check: yes
+
+- name: Install system dependencies
+  become: yes
+  dnf:
+    name: "{{ whpg_dependencies }}"
+    state: present
+    update_cache: yes
+
+- name: Reinstall perl (to fix any missing dependencies)
+  become: yes
+  dnf:
+    name: perl
+    state: present
+    allowerasing: yes
+
+- name: Set file descriptor limit for gpadmin user
+  become: yes
+  pam_limits:
+    domain: "{{ whpg_gpadmin_user }}"
+    limit_type: '-'
+    limit_item: nofile
+    value: "{{ whpg_file_limit }}"
+
+- name: Add ulimit to gpadmin .bashrc
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  lineinfile:
+    path: "{{ whpg_gpadmin_home }}/.bashrc"
+    line: "ulimit -n {{ whpg_file_limit }}"
+    state: present
+    create: yes

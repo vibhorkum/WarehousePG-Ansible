@@ -1,0 +1,63 @@
+---
+# User Management Variables
+whpg_gpadmin_uid: 530
+whpg_gpadmin_gid: 530
+whpg_gpadmin_user: gpadmin
+whpg_gpadmin_password: "NewPassword@123"
+whpg_gpadmin_home: "/home/{{ whpg_gpadmin_user }}"
+
+# EDB Repository
+edb_subscription_token: ""
+
+# WarehousePG Installation
+whpg_version: "7"
+whpg_install_path: "/usr/local/greenplum-db"
+whpg_rpm_version: "7.3.0-WHPG"
+
+# Cluster Configuration
+whpg_cluster_name: "WarehousePG_Cluster"
+whpg_seg_prefix: "whpg_seg"
+whpg_coordinator_port: 6000
+whpg_segment_port_base: 6002
+whpg_standby_port: 6001
+
+# Data Directories
+whpg_data_base: "{{ whpg_gpadmin_home }}/data"
+whpg_coordinator_directory: "{{ whpg_data_base }}/coordinator"
+whpg_primary_directory: "{{ whpg_data_base }}/primary"
+whpg_standby_directory: "{{ whpg_gpadmin_home }}/whpg-cluster/standby_qddir"
+
+# Network Configuration
+whpg_trusted_shell: "ssh"
+whpg_pg_hba_allowed_cidr: "10.0.0.0/16"
+
+# System Configuration
+whpg_file_limit: 65535
+
+# Coordinator Data Directory (will be set after initialization)
+whpg_coordinator_data_directory: "{{ whpg_coordinator_directory }}/{{ whpg_seg_prefix }}-1"
+
+# Dependencies
+whpg_dependencies:
+  - git
+  - rsync
+  - perl-ExtUtils-Embed
+  - perl-ExtUtils-MakeMaker
+  - python3-devel
+  - libxml2-devel
+  - readline-devel
+  - krb5-devel
+  - apr-devel
+  - libevent-devel
+  - libyaml-devel
+  - libcurl-devel
+  - bzip2-devel
+  - xerces-c-devel
+  - perl-FindBin
+  - perl-core
+
+# Packages to install
+whpg_packages:
+  - warehouse-pg-7
+  - warehouse-pg-clients
+  - whpg-backup

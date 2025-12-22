@@ -1,0 +1,19 @@
+---
+# handlers file for warehousepg
+
+- name: reload greenplum config
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  shell: |
+    source {{ whpg_install_path }}/greenplum_path.sh
+    gpstop -u
+  args:
+    executable: /bin/bash
+  environment:
+    COORDINATOR_DATA_DIRECTORY: "{{ whpg_coordinator_data_directory }}"
+
+- name: restart sshd
+  become: yes
+  service:
+    name: sshd
+    state: restarted

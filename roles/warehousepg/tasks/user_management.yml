@@ -1,0 +1,112 @@
+---
+# User Management Tasks
+
+- name: Create gpadmin group
+  become: yes
+  group:
+    name: "{{ whpg_gpadmin_user }}"
+    gid: "{{ whpg_gpadmin_gid }}"
+    state: present
+
+- name: Create gpadmin user
+  become: yes
+  user:
+    name: "{{ whpg_gpadmin_user }}"
+    uid: "{{ whpg_gpadmin_uid }}"
+    group: "{{ whpg_gpadmin_user }}"
+    home: "{{ whpg_gpadmin_home }}"
+    shell: /bin/bash
+    system: yes
+    create_home: yes
+    state: present
+
+- name: Set password for gpadmin user
+  become: yes
+  user:
+    name: "{{ whpg_gpadmin_user }}"
+    password: "{{ whpg_gpadmin_password | password_hash('sha512') }}"
+    update_password: always
+
+- name: Verify gpadmin user creation
+  command: id {{ whpg_gpadmin_user }}
+  register: gpadmin_id
+  changed_when: false
+
+- name: Display gpadmin user info
+  debug:
+    msg: "{{ gpadmin_id.stdout }}"
+
+- name: Generate SSH key for gpadmin
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  openssh_keypair:
+    path: "{{ whpg_gpadmin_home }}/.ssh/id_rsa"
+    type: rsa
+    size: 4096
+    state: present
+    force: no
+
+- name: Set up authorized_keys for passwordless SSH
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  authorized_key:
+    user: "{{ whpg_gpadmin_user }}"
+    state: present
+    key: "{{ lookup('file', whpg_gpadmin_home + '/.ssh/id_rsa.pub') }}"
+
+- name: Set correct permissions on .ssh directory
+  become: yes
+  file:
+    path: "{{ whpg_gpadmin_home }}/.ssh"
+    state: directory
+    owner: "{{ whpg_gpadmin_user }}"
+    group: "{{ whpg_gpadmin_user }}"
+    mode: '0700'
+
+- name: Set correct permissions on authorized_keys
+  become: yes
+  file:
+    path: "{{ whpg_gpadmin_home }}/.ssh/authorized_keys"
+    owner: "{{ whpg_gpadmin_user }}"
+    group: "{{ whpg_gpadmin_user }}"
+    mode: '0600'
+
+- name: Test passwordless SSH to localhost
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  command: ssh -o StrictHostKeyChecking=no -o BatchMode=yes localhost uptime
+  register: ssh_test
+  changed_when: false
+  failed_when: false
+
+- name: Display SSH test result
+  debug:
+    msg: "Passwordless SSH test {{ 'succeeded' if ssh_test.rc == 0 else 'failed' }}"
+
+- name: Ensure wheel group has NOPASSWD sudo access
+  become: yes
+  lineinfile:
+    path: /etc/sudoers
+    state: present
+    regexp: '^%wheel\s+ALL=\(ALL\)\s+NOPASSWD:\s+ALL'
+    line: '%wheel  ALL=(ALL)       NOPASSWD: ALL'
+    validate: 'visudo -cf %s'
+
+- name: Add gpadmin to wheel group
+  become: yes
+  user:
+    name: "{{ whpg_gpadmin_user }}"
+    groups: wheel
+    append: yes
+
+- name: Verify gpadmin sudo access
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  command: sudo -n whoami
+  register: sudo_test
+  changed_when: false
+  failed_when: sudo_test.stdout != "root"
+
+- name: Display sudo test result
+  debug:
+    msg: "Sudo access configured successfully for {{ whpg_gpadmin_user }}"
