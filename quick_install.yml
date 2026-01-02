@@ -1,0 +1,71 @@
+---
+# Quick Install Playbook: Simplified WarehousePG Installation
+# This playbook runs all steps in sequence for a quick deployment
+#
+# Usage:
+#   ansible-playbook -i inventory.yml quick_install.yml
+#   ansible-playbook -i test_inventory.yml quick_install.yml
+#
+# SSH Configuration:
+#   Make sure ansible_user and ansible_ssh_private_key_file are set in your inventory
+#   Example: ansible-playbook -i inventory.yml quick_install.yml -u rocky --private-key ~/.ssh/mykey.pem
+
+- name: WarehousePG Complete Installation
+  hosts: whpg_primary_site
+  become: yes
+  
+  pre_tasks:
+    - name: Display installation start
+      debug:
+        msg: 
+          - "Starting WarehousePG installation on {{ inventory_hostname }}"
+          - "Connecting as user: {{ ansible_user | default('not specified') }}"
+          - "Groups: {{ group_names }}"
+          - "Site: Primary"
+
+  roles:
+    # Step 1: OS Configuration
+    - role: warehousepg-os-config
+      tags: [os-config]
+      
+    # Step 2: Install WarehousePG packages
+    - role: warehousepg-install
+      vars:
+         edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"
+      tags: [install]
+      
+#    # Step 3: Create storage directories
+#    - role: warehousepg-storage
+#      tags: [storage]
+      
+#    # Step 4: Complete WarehousePG setup
+#    - role: warehousepg
+#      tags: [warehousepg]
+
+  post_tasks:
+    - name: Display installation summary
+      debug:
+        msg:
+          - "WarehousePG installation completed on {{ inventory_hostname }}"
+          - "Next steps:"
+          - "1. Verify cluster status: sudo -u gpadmin gpstate"
+          - "2. Connect to database: sudo -u gpadmin psql -d postgres"
+          - "3. Check configuration: cat /home/gpadmin/gpinitsystem_config"
+      when: "'whpg_primary_coordinator' in group_names"
+      tags: [summary]
+
+# Optional: DR Site Installation
+# Uncomment to install DR site
+# - name: WarehousePG DR Site Installation
+#   hosts: whpg_dr_site
+#   become: yes
+#   
+#   roles:
+#     - role: warehousepg-os-config
+#       tags: [os-config]
+#     - role: warehousepg-install
+#       tags: [install]
+#     - role: warehousepg-storage
+#       tags: [storage]
+#     - role: warehousepg
+#       tags: [warehousepg]

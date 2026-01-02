@@ -1,0 +1,26 @@
+---
+# IPC Object Removal Configuration Tasks
+
+- name: Disable IPC object removal in systemd logind.conf
+  become: yes
+  lineinfile:
+    path: /etc/systemd/logind.conf
+    regexp: '^#?RemoveIPC='
+    line: 'RemoveIPC=no'
+    state: present
+
+- name: Restart systemd-logind service
+  become: yes
+  systemd:
+    name: systemd-logind
+    state: restarted
+  failed_when: false
+
+- name: Verify RemoveIPC setting
+  command: grep RemoveIPC /etc/systemd/logind.conf
+  register: remove_ipc_verify
+  changed_when: false
+
+- name: Display RemoveIPC verification
+  debug:
+    msg: "RemoveIPC setting: {{ remove_ipc_verify.stdout }}"

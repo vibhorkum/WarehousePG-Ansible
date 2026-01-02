@@ -1,0 +1,58 @@
+---
+# Transparent Huge Pages Configuration Tasks
+
+- name: Check current THP status
+  command: cat /sys/kernel/mm/transparent_hugepage/enabled
+  register: thp_status
+  changed_when: false
+
+- name: Display current THP status
+  debug:
+    msg: "Current THP status: {{ thp_status.stdout }}"
+
+- name: Disable THP using grubby
+  become: yes
+  command: grubby --update-kernel=ALL --args="transparent_hugepage=never"
+  register: grubby_thp_result
+  changed_when: grubby_thp_result.rc == 0
+  failed_when: false
+
+- name: Alternative - Add THP parameter to GRUB config
+  become: yes
+  lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX='
+    line: 'GRUB_CMDLINE_LINUX="{{ grub_cmdline_current }} transparent_hugepage=never"'
+    backrefs: yes
+    state: present
+  vars:
+    grub_cmdline_current: "{{ lookup('file', '/etc/default/grub') | regex_search('GRUB_CMDLINE_LINUX=\"(.*)\"', '\\1') | first | default('') }}"
+  when: grubby_thp_result.rc != 0
+  register: grub_config_updated
+
+- name: Regenerate GRUB config if manually updated
+  become: yes
+  command: grub2-mkconfig -o /boot/grub2/grub.cfg
+  when: grub_config_updated is changed
+
+- name: Disable THP immediately (until reboot)
+  become: yes
+  shell: |
+    echo never > /sys/kernel/mm/transparent_hugepage/enabled
+    echo never > /sys/kernel/mm/transparent_hugepage/defrag
+  changed_when: true
+  failed_when: false
+
+- name: Verify THP is disabled
+  command: cat /sys/kernel/mm/transparent_hugepage/enabled
+  register: thp_verify
+  changed_when: false
+
+- name: Display THP verification
+  debug:
+    msg: "THP status after configuration: {{ thp_verify.stdout }}"
+
+- name: Notify about reboot for THP changes
+  debug:
+    msg: "THP configuration updated. A system reboot is required for permanent changes."
+  when: "'[never]' not in thp_verify.stdout"

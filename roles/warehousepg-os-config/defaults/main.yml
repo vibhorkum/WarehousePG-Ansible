@@ -1,0 +1,119 @@
+---
+# Cleanup Mode - Set to true to restore OS settings
+whpg_cleanup_mode: false
+whpg_cleanup_restore_defaults: true  # Restore OS settings to defaults during cleanup
+
+# SELinux Configuration
+whpg_selinux_state: disabled  # disabled, enforcing, permissive
+whpg_selinux_provider_sssd: none
+
+# Firewall Configuration
+whpg_disable_firewall: true
+whpg_firewall_state: stopped  # stopped, started
+whpg_firewall_enabled: false
+
+# System Memory Configuration
+# Set to 'auto' to automatically detect system memory, or specify a value in GB
+whpg_system_memory_gb: auto  # Auto-detect or set specific value (e.g., 64)
+
+# Shared Memory Settings (calculated automatically if not set)
+whpg_kernel_shmall: ""  # Will be auto-calculated if empty
+whpg_kernel_shmmax: ""  # Will be auto-calculated if empty
+whpg_kernel_shmmni: 4096
+
+# Memory Overcommit Settings
+whpg_vm_overcommit_memory: 2
+whpg_vm_overcommit_ratio: 95
+
+# Port Range Settings
+whpg_port_range_min: 10000
+whpg_port_range_max: 65535
+whpg_reserved_port_azure: 65330  # For Azure deployments
+
+# Kernel Semaphore Settings
+whpg_kernel_sem: "250 2048000 200 8192"
+
+# Kernel Message Queue Settings
+whpg_kernel_msgmnb: 65536
+whpg_kernel_msgmax: 65536
+whpg_kernel_msgmni: 2048
+
+# Network Settings
+whpg_net_ipv4_tcp_syncookies: 1
+whpg_net_ipv4_tcp_max_syn_backlog: 4096
+whpg_net_ipv4_conf_all_arp_filter: 1
+whpg_net_core_netdev_max_backlog: 10000
+whpg_net_core_rmem_max: 2097152
+whpg_net_core_wmem_max: 2097152
+
+# IP Fragmentation Settings
+whpg_net_ipv4_ipfrag_high_thresh: 41943040
+whpg_net_ipv4_ipfrag_low_thresh: 31457280
+whpg_net_ipv4_ipfrag_time: 60
+
+# VM Settings
+whpg_vm_swappiness: 10
+whpg_vm_zone_reclaim_mode: 0
+whpg_vm_dirty_expire_centisecs: 500
+whpg_vm_dirty_writeback_centisecs: 100
+
+# System Memory VM Settings (for > 64GB RAM)
+whpg_vm_dirty_background_ratio: 0
+whpg_vm_dirty_ratio: 0
+whpg_vm_dirty_background_bytes: 1610612736  # 1.5GB
+whpg_vm_dirty_bytes: 4294967296  # 4GB
+whpg_vm_min_free_kbytes_percent: 3  # Percentage of total RAM
+
+# System Memory VM Settings (for <= 64GB RAM)
+whpg_vm_dirty_background_ratio_small: 3
+whpg_vm_dirty_ratio_small: 10
+
+# Other Kernel Settings
+whpg_kernel_sysrq: 1
+whpg_kernel_core_uses_pid: 1
+
+# Resource Limits
+whpg_nofile_soft: 524288
+whpg_nofile_hard: 524288
+whpg_nproc_soft: 131072
+whpg_nproc_hard: 131072
+whpg_core_limit: unlimited
+
+# Core Dump Settings
+whpg_enable_core_dump: true
+whpg_core_dump_pattern: "/var/core/core.%h.%t"
+whpg_core_dump_directory: "/var/core"
+
+# XFS Mount Options
+whpg_xfs_mount_options: "rw,nodev,noatime,inode64"
+
+# Disk I/O Settings
+whpg_blockdev_readahead: 16384
+whpg_disk_scheduler: "mq-deadline"  # mq-deadline, deadline, none, noop
+whpg_disk_devices: []  # List of disk devices to configure (e.g., ['/dev/sdb', '/dev/sdc'])
+
+# Transparent Huge Pages
+whpg_disable_thp: true
+
+# IPC Object Removal
+whpg_disable_remove_ipc: true
+
+# SSH Connection Threshold
+whpg_ssh_max_startups: "10:30:200"
+whpg_ssh_max_sessions: 200
+whpg_ssh_config_file: "/etc/ssh/sshd_config"
+
+# NTP/Chrony Configuration
+whpg_configure_ntp: false
+whpg_ntp_daemon: chronyd  # chronyd or ntpd
+whpg_ntp_servers:
+  - "0.pool.ntp.org"
+  - "1.pool.ntp.org"
+
+# Network MTU
+whpg_configure_mtu: false
+whpg_network_mtu: 9000
+whpg_network_interfaces: []  # List of interfaces to configure
+
+# Apply Settings
+whpg_reboot_required: false  # Set to true to allow automatic reboot

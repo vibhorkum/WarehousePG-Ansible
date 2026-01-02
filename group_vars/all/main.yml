@@ -1,8 +1,8 @@
 # WarehousePG common variables for all hosts
 
-# Connection settings
-ansible_user: rocky
-ansible_ssh_private_key_file: ~/.ssh/id_rsa
+# Connection settings (can be overridden in inventory)
+# ansible_user: rocky
+# ansible_ssh_private_key_file: /path/to/your/key.pem
 
 # WarehousePG version
 whpg_version: "7"

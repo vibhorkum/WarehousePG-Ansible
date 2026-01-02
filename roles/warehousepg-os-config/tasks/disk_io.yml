@@ -1,0 +1,46 @@
+---
+# Disk I/O Configuration Tasks
+
+- name: Set blockdev read-ahead for specified disk devices
+  become: yes
+  command: "/sbin/blockdev --setra {{ whpg_blockdev_readahead }} {{ item }}"
+  loop: "{{ whpg_disk_devices }}"
+  when: whpg_disk_devices | length > 0
+  changed_when: true
+
+- name: Add blockdev settings to rc.local for persistence
+  become: yes
+  lineinfile:
+    path: /etc/rc.d/rc.local
+    line: "/sbin/blockdev --setra {{ whpg_blockdev_readahead }} {{ item }}"
+    state: present
+    create: yes
+  loop: "{{ whpg_disk_devices }}"
+  when: whpg_disk_devices | length > 0
+
+- name: Ensure rc.local is executable
+  become: yes
+  file:
+    path: /etc/rc.d/rc.local
+    mode: '0755'
+  when: whpg_disk_devices | length > 0
+
+- name: Configure disk I/O scheduler using grubby
+  become: yes
+  command: "grubby --update-kernel=ALL --args='elevator={{ whpg_disk_scheduler }}'"
+  register: grubby_result
+  changed_when: grubby_result.rc == 0
+  failed_when: false
+
+- name: Display disk scheduler configuration result
+  debug:
+    msg: "Disk I/O scheduler set to {{ whpg_disk_scheduler }}. Reboot required to take effect."
+  when: grubby_result is defined and grubby_result.rc == 0
+
+- name: Set disk scheduler immediately (temporary until reboot)
+  become: yes
+  shell: "echo {{ whpg_disk_scheduler }} > /sys/block/{{ item | basename }}/queue/scheduler"
+  loop: "{{ whpg_disk_devices }}"
+  when: whpg_disk_devices | length > 0
+  failed_when: false
+  changed_when: true

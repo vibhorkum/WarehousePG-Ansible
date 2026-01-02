@@ -11,7 +11,7 @@ SEG_PREFIX={{ whpg_seg_prefix }}
 PORT_BASE={{ whpg_segment_port_base }}
 
 # Coordinator (Master) Configuration
-COORDINATOR_HOSTNAME={{ inventory_hostname }}
+COORDINATOR_HOSTNAME={{ hostvars[inventory_hostname].hostname | default(inventory_hostname) }}
 COORDINATOR_DIRECTORY={{ whpg_coordinator_directory }}
 COORDINATOR_PORT={{ whpg_coordinator_port }}
 

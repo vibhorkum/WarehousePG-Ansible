@@ -23,47 +23,146 @@
     msg: "SSH to upstream {{ 'succeeded' if ssh_upstream_test.rc == 0 else 'failed' }}"
   when: ssh_upstream_test is defined
 
-- name: Create standby data directory
+- name: Get standby coordinator hostname
+  set_fact:
+    standby_host: "{{ lookup('inventory_hostnames', 'whpg_dr_coordinator') | first }}"
+  when: 
+    - "'whpg_dr_coordinator' in groups"
+    - groups['whpg_dr_coordinator'] | length > 0
+
+- name: Get primary coordinator from upstream_node (using lookup)
+  set_fact:
+    primary_host: "{{ lookup('vars', 'hostvars')[inventory_hostname].get('upstream_node_hostname', lookup('inventory_hostnames', 'whpg_primary_coordinator') | first) }}"
+    primary_ip: "{{ lookup('vars', 'hostvars')[inventory_hostname].get('upstream_node_ip', (whpg_use_private_ip_for_hosts and lookup('vars', 'hostvars')[lookup('inventory_hostnames', 'whpg_primary_coordinator') | first].private_ip is defined) | ternary(lookup('vars', 'hostvars')[lookup('inventory_hostnames', 'whpg_primary_coordinator') | first].private_ip, lookup('vars', 'hostvars')[lookup('inventory_hostnames', 'whpg_primary_coordinator') | first].ansible_host)) }}"
+  when: 
+    - "'whpg_dr_coordinator' in group_names"
+
+- name: Get primary coordinator hostname (for primary tasks)
+  set_fact:
+    primary_host: "{{ lookup('inventory_hostnames', 'whpg_primary_coordinator') | first }}"
+    primary_ip: "{{ (whpg_use_private_ip_for_hosts and lookup('vars', 'hostvars')[lookup('inventory_hostnames', 'whpg_primary_coordinator') | first].private_ip is defined) | ternary(lookup('vars', 'hostvars')[lookup('inventory_hostnames', 'whpg_primary_coordinator') | first].private_ip, lookup('vars', 'hostvars')[lookup('inventory_hostnames', 'whpg_primary_coordinator') | first].ansible_host) }}"
+  when: 
+    - "'whpg_primary_coordinator' in group_names"
+
+- name: Check if standby data directory exists
+  stat:
+    path: "{{ whpg_standby_directory }}"
+  register: standby_dir_check
+  when: "'whpg_dr_coordinator' in group_names"
+
+- name: Create standby base directory on standby host
   become: yes
   become_user: "{{ whpg_gpadmin_user }}"
   file:
-    path: "{{ whpg_standby_directory }}"
+    path: "{{ whpg_standby_directory | dirname }}"
     state: directory
     owner: "{{ whpg_gpadmin_user }}"
     group: "{{ whpg_gpadmin_user }}"
     mode: '0700'
-  when: "'standby-coordinator' in group_names"
+  when: 
+    - "'whpg_dr_coordinator' in group_names"
+    - not standby_dir_check.stat.exists
 
-- name: Check if standby is already initialized
-  stat:
-    path: "{{ whpg_standby_directory }}/PG_VERSION"
-  register: standby_initialized
-  when: "'standby-coordinator' in group_names"
+- name: Add replication entry to primary pg_hba.conf
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  lineinfile:
+    path: "{{ whpg_coordinator_data_directory }}/pg_hba.conf"
+    line: "host    replication    {{ whpg_gpadmin_user }}    {{ (whpg_use_private_ip_for_hosts and lookup('vars', 'hostvars')[standby_host].private_ip is defined) | ternary(lookup('vars', 'hostvars')[standby_host].private_ip, lookup('vars', 'hostvars')[standby_host].ansible_host) }}/32    trust"
+    state: present
+  when: 
+    - "'whpg_primary_coordinator' in group_names"
+    - standby_host is defined
+  notify: reload greenplum config
 
-- name: Initialize standby coordinator
+- name: Reload primary coordinator to apply pg_hba changes
   become: yes
   become_user: "{{ whpg_gpadmin_user }}"
   shell: |
     source {{ whpg_install_path }}/greenplum_path.sh
-    gpinitstandby -s {{ hostvars[inventory_hostname].private_ip }} -P {{ whpg_standby_port }} -S {{ whpg_standby_directory }} -a
+    pg_ctl reload -D {{ whpg_coordinator_data_directory }}
   args:
     executable: /bin/bash
-  environment:
-    COORDINATOR_DATA_DIRECTORY: "{{ whpg_coordinator_data_directory }}"
-  register: standby_init
-  when: 
-    - "'standby-coordinator' in group_names"
-    - not standby_initialized.stat.exists
-  delegate_to: "{{ groups['primary-coordinator'][0] }}"
+  when: "'whpg_primary_coordinator' in group_names"
+  changed_when: false
 
-- name: Display standby initialization result
+- name: Perform pg_basebackup from primary to standby
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  shell: |
+    source {{ whpg_install_path }}/greenplum_path.sh
+    pg_basebackup -h {{ primary_ip }} -p {{ whpg_coordinator_port }} -U {{ whpg_gpadmin_user }} -D {{ whpg_standby_directory }} -Fp -Xs -P -R
+  args:
+    executable: /bin/bash
+  register: pg_basebackup_result
+  when: 
+    - "'whpg_dr_coordinator' in group_names"
+    - not standby_dir_check.stat.exists or not (standby_dir_check.stat.exists and standby_dir_check.stat.isdir)
+
+- name: Display pg_basebackup result
   debug:
-    msg: "{{ standby_init.stdout_lines }}"
-  when: 
-    - standby_init is defined 
-    - standby_init.changed
+    msg: "{{ pg_basebackup_result.stderr_lines }}"
+  when:
+    - pg_basebackup_result is defined
+    - pg_basebackup_result.changed
 
-- name: Verify standby replication status
+- name: Update standby port in postgresql.conf
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  lineinfile:
+    path: "{{ whpg_standby_directory }}/postgresql.conf"
+    regexp: '^port\s*='
+    line: "port = {{ whpg_standby_port }}"
+    state: present
+  when: "'whpg_dr_coordinator' in group_names"
+
+- name: Configure primary_conninfo in postgresql.auto.conf
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  lineinfile:
+    path: "{{ whpg_standby_directory }}/postgresql.auto.conf"
+    line: "primary_conninfo = 'host={{ primary_ip }} port={{ whpg_coordinator_port }} user={{ whpg_gpadmin_user }} application_name=gp_walreceiver'"
+    state: present
+    create: yes
+  when: "'whpg_dr_coordinator' in group_names"
+
+- name: Start standby coordinator
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  shell: |
+    source {{ whpg_install_path }}/greenplum_path.sh
+    pg_ctl -D {{ whpg_standby_directory }} -l {{ whpg_standby_directory }}/standby.log -o "-c gp_role=dispatch" start
+  args:
+    executable: /bin/bash
+  register: standby_start
+  when: 
+    - "'whpg_dr_coordinator' in group_names"
+    - pg_basebackup_result is defined
+    - pg_basebackup_result.changed
+
+- name: Display standby start result
+  debug:
+    msg: "Standby coordinator started successfully"
+  when:
+    - standby_start is defined
+    - standby_start.changed
+
+- name: Display standby start result
+  debug:
+    msg: "Standby coordinator started successfully"
+  when:
+    - standby_start is defined
+    - standby_start.changed
+
+- name: Wait for standby to start streaming
+  pause:
+    seconds: 10
+  when:
+    - "'whpg_dr_coordinator' in group_names"
+    - standby_start is defined
+    - standby_start.changed
+
+- name: Verify standby replication status from primary
   become: yes
   become_user: "{{ whpg_gpadmin_user }}"
   shell: |
@@ -75,8 +174,7 @@
     COORDINATOR_DATA_DIRECTORY: "{{ whpg_coordinator_data_directory }}"
   register: replication_status
   changed_when: false
-  when: "'primary-coordinator' in group_names"
-  delegate_to: "{{ groups['primary-coordinator'][0] }}"
+  when: "'whpg_primary_coordinator' in group_names"
 
 - name: Display replication status
   debug:
@@ -84,3 +182,41 @@
   when: 
     - replication_status is defined
     - replication_status.stdout_lines is defined
+
+- name: Update internal catalog with standby information
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  shell: |
+    source {{ whpg_install_path }}/greenplum_path.sh
+    psql -p {{ whpg_coordinator_port }} -d postgres -c "SELECT gp_add_master_standby('{{ standby_host }}', '{{ (whpg_use_private_ip_for_hosts and lookup('vars', 'hostvars')[standby_host].private_ip is defined) | ternary(lookup('vars', 'hostvars')[standby_host].private_ip, lookup('vars', 'hostvars')[standby_host].ansible_host) }}', {{ whpg_standby_port }}, '{{ whpg_standby_directory }}');"
+  args:
+    executable: /bin/bash
+  environment:
+    COORDINATOR_DATA_DIRECTORY: "{{ whpg_coordinator_data_directory }}"
+  register: catalog_update
+  when: 
+    - "'whpg_primary_coordinator' in group_names"
+    - standby_host is defined
+  changed_when: false
+  failed_when: false
+
+- name: Check gpstate with standby details
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  shell: |
+    source {{ whpg_install_path }}/greenplum_path.sh
+    gpstate -f
+  args:
+    executable: /bin/bash
+  environment:
+    COORDINATOR_DATA_DIRECTORY: "{{ whpg_coordinator_data_directory }}"
+  register: gpstate_standby
+  changed_when: false
+  when: "'whpg_primary_coordinator' in group_names"
+
+- name: Display standby status from gpstate
+  debug:
+    msg: "{{ gpstate_standby.stdout_lines }}"
+  when:
+    - gpstate_standby is defined
+    - gpstate_standby.stdout_lines is defined

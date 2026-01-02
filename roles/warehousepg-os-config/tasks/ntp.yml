@@ -1,0 +1,76 @@
+---
+# NTP/Chrony Configuration Tasks
+
+- name: Install chrony package
+  become: yes
+  dnf:
+    name: chrony
+    state: present
+  when: whpg_ntp_daemon == 'chronyd'
+
+- name: Install ntp package
+  become: yes
+  dnf:
+    name: ntp
+    state: present
+  when: whpg_ntp_daemon == 'ntpd'
+
+- name: Configure chrony servers
+  become: yes
+  template:
+    src: chrony.conf.j2
+    dest: /etc/chrony.conf
+    owner: root
+    group: root
+    mode: '0644'
+  when: whpg_ntp_daemon == 'chronyd'
+  notify: restart chronyd
+
+- name: Configure ntp servers
+  become: yes
+  template:
+    src: ntp.conf.j2
+    dest: /etc/ntp.conf
+    owner: root
+    group: root
+    mode: '0644'
+  when: whpg_ntp_daemon == 'ntpd'
+  notify: restart ntpd
+
+- name: Enable and start chrony service
+  become: yes
+  systemd:
+    name: chronyd
+    state: started
+    enabled: yes
+  when: whpg_ntp_daemon == 'chronyd'
+
+- name: Enable and start ntp service
+  become: yes
+  systemd:
+    name: ntpd
+    state: started
+    enabled: yes
+  when: whpg_ntp_daemon == 'ntpd'
+
+- name: Verify time synchronization (chrony)
+  command: chronyc tracking
+  register: chrony_status
+  changed_when: false
+  when: whpg_ntp_daemon == 'chronyd'
+
+- name: Display chrony status
+  debug:
+    msg: "{{ chrony_status.stdout_lines }}"
+  when: whpg_ntp_daemon == 'chronyd'
+
+- name: Verify time synchronization (ntp)
+  command: ntpq -p
+  register: ntp_status
+  changed_when: false
+  when: whpg_ntp_daemon == 'ntpd'
+
+- name: Display ntp status
+  debug:
+    msg: "{{ ntp_status.stdout_lines }}"
+  when: whpg_ntp_daemon == 'ntpd'

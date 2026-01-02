@@ -1,39 +1,38 @@
----
 all:
+  vars:
+    # SSH Configuration - Update these values
+    ansible_user: rocky  # Change to your SSH user (ec2-user, ubuntu, rocky, etc.)
+    ansible_ssh_private_key_file: ~/.ssh/id_rsa  # Path to your private key
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
   children:
-    primary-coordinator:
-      hosts:
-        whpg1-coordinator:
-          ansible_host: 110.0.0.4
-          private_ip: 10.0.0.4
-    primary-segments:
-      hosts:
-        whpg-segment1:
-          ansible_host: 110.0.0.1
-          private_ip: 10.0.0.1
-          coordinator: whpg1-coordinator
-        whpg-segment2:
-          ansible_host: 110.0.0.2
-          private_ip: 10.0.0.2
-          coordinator: whpg1-coordinator
-    standby-coordinator:
-      hosts:
-        standby-coordinator:
-          ansible_host: 110.0.0.5
-          private_ip: 10.0.0.5
-          upstream_node_private_ip: whpg1-coordinator
-          replication_type: synchronous
-    standby-segments:
-      hosts:
-        standby-segments1:
-          ansible_host: 110.0.0.3
-          private_ip: 10.0.0.3
-          upstream_node_private_ip: whpg-segment1
-          replication_type: asynchronous
-          coordinator: standby-coordinator
-        standby-segments2:
-          ansible_host: 110.0.0.3
-          private_ip: 10.0.0.3
-          upstream_node_private_ip: whpg-segment2
-          coordinator: standby-coordinator
-          replication_type: asynchronous
+    whpg_primary_site:
+      children:
+        whpg_primary_coordinator:
+          hosts:
+            whpg-coordinator:
+              ansible_host: 3.22.42.68
+              hostname: whpg-coordinator
+        whpg_primary_segments:
+          hosts:
+            whpg-segment:
+              ansible_host: 18.226.172.107
+              hostname: whpg-segment
+
+    whpg_dr_site:
+      children:
+        whpg_dr_coordinator:
+          hosts:
+            dr-coordinator:
+              ansible_host: 210.0.0.4
+              hostname: dr-coordinator
+              upstream_cluster: whpg_primary_site
+              replication_slot: dr-coordinator
+              restore_command: "rsync -a /mnt/wal_archive/whpg-coordinator/%f \"%p\""
+        whpg_dr_segments:
+          hosts:
+            dr-segment:
+              ansible_host: 210.0.0.1
+              hostname: dr-segment
+              upstream_segment: whpg-segment
+              replication_slot: dr-segment
+              restore_command: "rsync -a /mnt/wal_archive/whpg-segment/%f \"%p\""

@@ -1,20 +1,20 @@
 ---
 galaxy_info:
   author: WarehousePG Team
-  description: Ansible role for WarehousePG HA installation and configuration
+  description: Ansible role for WarehousePG storage directory creation and configuration
   company: 
   license: MIT
   min_ansible_version: 2.9
   platforms:
     - name: EL
       versions:
+        - 8
         - 9
   galaxy_tags:
     - database
     - postgresql
     - greenplum
     - warehousepg
-    - ha
+    - storage
 
-dependencies:
-  - role: warehousepg-install
+dependencies: []

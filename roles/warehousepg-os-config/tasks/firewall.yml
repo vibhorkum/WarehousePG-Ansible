@@ -1,0 +1,41 @@
+---
+# Firewall Configuration Tasks
+
+- name: Check if firewalld is installed
+  command: systemctl status firewalld
+  register: firewalld_status
+  changed_when: false
+  failed_when: false
+
+- name: Display firewalld status
+  debug:
+    msg: "Firewalld status: {{ 'installed' if firewalld_status.rc == 0 else 'not installed' }}"
+
+- name: Stop firewalld service
+  become: yes
+  systemd:
+    name: firewalld
+    state: stopped
+  when:
+    - whpg_disable_firewall
+    - firewalld_status.rc == 0
+
+- name: Disable firewalld service
+  become: yes
+  systemd:
+    name: firewalld
+    enabled: no
+  when:
+    - whpg_disable_firewall
+    - firewalld_status.rc == 0
+
+- name: Ensure firewalld is started and enabled (if configured)
+  become: yes
+  systemd:
+    name: firewalld
+    state: started
+    enabled: yes
+  when:
+    - not whpg_disable_firewall
+    - whpg_firewall_state == 'started'
+    - firewalld_status.rc == 0

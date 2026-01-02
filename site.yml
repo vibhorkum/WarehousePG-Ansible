@@ -2,7 +2,7 @@
 # Main playbook for WarehousePG installation and configuration
 
 - name: Install and Configure WarehousePG on Primary Coordinator
-  hosts: primary-coordinator
+  hosts: whpg_primary_coordinator
   become: yes
   vars:
     edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"  # Replace with your actual token
@@ -10,10 +10,10 @@
   roles:
     - warehousepg
   tags:
-    - primary-coordinator
+    - whpg_primary_coordinator
 
 - name: Install and Configure WarehousePG on Primary Segments
-  hosts: primary-segments
+  hosts: whpg_primary_segments
   become: yes
   vars:
     edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"  # Replace with your actual token
@@ -21,10 +21,10 @@
   roles:
     - warehousepg
   tags:
-    - primary-segments
+    - whpg_primary_segments
 
-- name: Install and Configure WarehousePG on Standby Coordinator
-  hosts: standby-coordinator
+- name: Install and Configure WarehousePG on DR Coordinator
+  hosts: whpg_dr_coordinator
   become: yes
   vars:
     edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"  # Replace with your actual token
@@ -32,10 +32,10 @@
   roles:
     - warehousepg
   tags:
-    - standby-coordinator
+    - whpg_dr_coordinator
 
-- name: Install and Configure WarehousePG on Standby Segments
-  hosts: standby-segments
+- name: Install and Configure WarehousePG on DR Segments
+  hosts: whpg_dr_segments
   become: yes
   vars:
     edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"  # Replace with your actual token
@@ -43,4 +43,4 @@
   roles:
     - warehousepg
   tags:
-    - standby-segments
+    - whpg_dr_segments

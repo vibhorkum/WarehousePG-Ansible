@@ -1,0 +1,71 @@
+---
+# Main tasks file for warehousepg-os-config
+
+- name: Include cleanup tasks if cleanup mode is enabled
+  include_tasks: cleanup.yml
+  when: whpg_cleanup_mode | bool
+  tags: [cleanup, uninstall]
+
+- name: Skip OS configuration tasks in cleanup mode
+  meta: end_play
+  when: whpg_cleanup_mode | bool
+
+- name: Include SELinux configuration tasks
+  include_tasks: selinux.yml
+  tags: [os-config, selinux]
+
+- name: Include firewall configuration tasks
+  include_tasks: firewall.yml
+  tags: [os-config, firewall]
+
+- name: Include sysctl configuration tasks
+  include_tasks: sysctl.yml
+  tags: [os-config, sysctl]
+
+- name: Include system limits configuration tasks
+  include_tasks: limits.yml
+  tags: [os-config, limits]
+
+- name: Include core dump configuration tasks
+  include_tasks: coredump.yml
+  tags: [os-config, coredump]
+  when: whpg_enable_core_dump
+
+- name: Include disk I/O configuration tasks
+  include_tasks: disk_io.yml
+  tags: [os-config, disk]
+
+- name: Include Transparent Huge Pages configuration tasks
+  include_tasks: thp.yml
+  tags: [os-config, thp]
+  when: whpg_disable_thp
+
+- name: Include IPC configuration tasks
+  include_tasks: ipc.yml
+  tags: [os-config, ipc]
+  when: whpg_disable_remove_ipc
+
+- name: Include SSH configuration tasks
+  include_tasks: ssh.yml
+  tags: [os-config, ssh]
+
+- name: Include network configuration tasks
+  include_tasks: network.yml
+  tags: [os-config, network]
+  when: whpg_configure_mtu
+
+- name: Include NTP configuration tasks
+  include_tasks: ntp.yml
+  tags: [os-config, ntp]
+  when: whpg_configure_ntp
+
+- name: Check if reboot is required
+  stat:
+    path: /var/run/reboot-required
+  register: reboot_required_file
+  changed_when: false
+
+- name: Notify about reboot requirement
+  debug:
+    msg: "System reboot is recommended to apply all OS configuration changes. SELinux, THP, and kernel parameters changes require a reboot."
+  when: not whpg_reboot_required

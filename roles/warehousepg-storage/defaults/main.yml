@@ -1,0 +1,35 @@
+---
+# Cleanup Mode - Set to true to remove storage directories
+whpg_cleanup_mode: false
+whpg_cleanup_remove_data: false  # WARNING: Set to true to delete data directories during cleanup
+
+# Storage Directory Paths
+whpg_storage_base: "/data"
+whpg_coordinator_storage: "{{ whpg_storage_base }}/coordinator"
+whpg_standby_storage: "{{ whpg_storage_base }}/coordinator"
+whpg_primary_storage: "{{ whpg_storage_base }}/primary"
+whpg_mirror_storage: "{{ whpg_storage_base }}/mirror"
+
+# Additional storage paths (can be list for multiple mount points)
+whpg_additional_primary_storage: []  # e.g., ['/data1/primary', '/data2/primary']
+whpg_additional_mirror_storage: []   # e.g., ['/data1/mirror', '/data2/mirror']
+
+# Ownership and Permissions
+whpg_storage_owner: gpadmin
+whpg_storage_group: gpadmin
+whpg_storage_mode: '0700'
+
+# Storage Validation
+whpg_validate_storage_space: true
+whpg_min_coordinator_space_gb: 10
+whpg_min_segment_space_gb: 50
+whpg_min_mirror_space_gb: 50
+
+# Create Directories Options
+whpg_create_coordinator_dirs: true
+whpg_create_standby_dirs: true
+whpg_create_primary_dirs: true
+whpg_create_mirror_dirs: true
+
+# Force creation even if directory exists
+whpg_force_create: false

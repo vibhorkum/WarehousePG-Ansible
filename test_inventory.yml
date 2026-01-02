@@ -1,0 +1,21 @@
+all:
+  vars:
+    # SSH Configuration - Update these values
+    ansible_user: rocky  # Change to your SSH user (ec2-user, ubuntu, rocky, etc.)
+    ansible_ssh_private_key_file: /Users/vibhor.kumar/.ssh/Vibhor-Pioneer-AWS-Key.pem  # Full path to your private key
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+  children:
+    whpg_primary_site:
+      children:
+        whpg_primary_coordinator:
+          hosts:
+            whpg-coordinator:
+              ansible_host: 3.22.42.68
+              hostname: whpg-coordinator
+              private_ip: 10.0.2.40
+        whpg_primary_segments:
+          hosts:
+            whpg-segment:
+              ansible_host: 18.226.172.107
+              private_ip: 10.0.9.61
+              hostname: whpg-segment

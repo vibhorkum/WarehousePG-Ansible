@@ -1,0 +1,33 @@
+---
+# Main tasks file for warehousepg-storage
+
+- name: Include cleanup tasks if cleanup mode is enabled
+  include_tasks: cleanup.yml
+  when: whpg_cleanup_mode | bool
+  tags: [cleanup, uninstall]
+
+- name: Skip storage creation tasks in cleanup mode
+  meta: end_play
+  when: whpg_cleanup_mode | bool
+
+- name: Include coordinator storage tasks
+  include_tasks: coordinator_storage.yml
+  tags: [storage, coordinator-storage]
+  when: 
+    - "'whpg_primary_coordinator' in group_names or 'whpg_dr_coordinator' in group_names"
+    - whpg_create_coordinator_dirs
+
+- name: Include segment storage tasks
+  include_tasks: segment_storage.yml
+  tags: [storage, segment-storage]
+  when: 
+    - "'whpg_primary_segments' in group_names or 'whpg_dr_segments' in group_names"
+    - whpg_create_primary_dirs or whpg_create_mirror_dirs
+
+- name: Display storage configuration summary
+  debug:
+    msg:
+      - "Storage directories created successfully"
+      - "Coordinator: {{ whpg_coordinator_storage if 'whpg_primary_coordinator' in group_names or 'whpg_dr_coordinator' in group_names else 'N/A' }}"
+      - "Primary segments: {{ whpg_primary_storage if 'whpg_primary_segments' in group_names or 'whpg_dr_segments' in group_names else 'N/A' }}"
+      - "Mirror segments: {{ whpg_mirror_storage if whpg_create_mirror_dirs and ('whpg_primary_segments' in group_names or 'whpg_dr_segments' in group_names) else 'N/A' }}"

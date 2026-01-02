@@ -144,20 +144,40 @@ ansible primary-coordinator -m shell -a "source /usr/local/greenplum-db/greenplu
 
 ## Inventory Plugin
 
-The custom `warehousepg` inventory plugin automatically resolves `upstream_node_private_ip` references:
+The custom `warehousepg` inventory plugin automatically resolves `upstream_node_private_ip` references to actual IP addresses. The role tasks use Ansible lookup plugins to retrieve this information dynamically.
+
+**How it works:**
+
+1. Define `upstream_node_private_ip` with a hostname reference in your inventory
+2. The plugin automatically resolves it to the actual IP address
+3. Tasks use `lookup('vars', 'hostvars')` to retrieve resolved values dynamically
 
 **Before plugin processing:**
 ```yaml
 standby-coordinator:
   upstream_node_private_ip: whpg1-coordinator
+  replication_type: synchronous
 ```
 
 **After plugin processing:**
 ```yaml
 standby-coordinator:
-  upstream_node_private_ip: whpg1-coordinator
-  upstream_node_ip: 10.0.0.4
-  upstream_node_hostname: whpg1-coordinator
+  upstream_node_private_ip: whpg1-coordinator  # Original reference
+  upstream_node_ip: 10.0.0.4                   # Resolved IP
+  upstream_node_hostname: whpg1-coordinator    # Resolved hostname
+  replication_type: synchronous
+```
+
+**Usage in tasks with lookup plugins:**
+```yaml
+# Tasks use Ansible lookup plugins to dynamically retrieve values
+- set_fact:
+    primary_ip: "{{ lookup('vars', 'hostvars')[inventory_hostname].upstream_node_ip }}"
+
+# This allows for dynamic resolution at runtime
+- name: Configure replication
+  command: >
+    pg_basebackup -h {{ primary_ip }} -p {{ whpg_coordinator_port }}
 ```
 
 ## Role Variables
@@ -228,6 +248,37 @@ ansible all -m shell -a "/usr/local/greenplum-db/bin/postgres --version"
 ```bash
 ansible primary-coordinator -m shell -a "source /usr/local/greenplum-db/greenplum_path.sh && gpstate -s" -u rocky
 ```
+
+## Cleanup and Uninstallation
+
+To remove WarehousePG installation and optionally restore system defaults:
+
+### Basic Cleanup (Packages Only)
+```bash
+ansible-playbook -i inventory.yml cleanup.yml
+```
+This removes WarehousePG packages but keeps the gpadmin user and data directories.
+
+### Full Cleanup (Including User)
+```bash
+ansible-playbook -i inventory.yml cleanup.yml -e "whpg_cleanup_remove_user=true"
+```
+
+### Complete Cleanup (Including Data)
+⚠️ **WARNING**: This permanently deletes all WarehousePG data!
+```bash
+ansible-playbook -i inventory.yml cleanup.yml \
+  -e "whpg_cleanup_remove_user=true" \
+  -e "whpg_cleanup_remove_data=true"
+```
+
+### Cleanup Options
+- `whpg_cleanup_remove_packages`: Remove packages (default: true)
+- `whpg_cleanup_remove_user`: Remove gpadmin user (default: false)
+- `whpg_cleanup_remove_data`: Remove data directories (default: false)
+- `whpg_cleanup_restore_defaults`: Restore OS settings (default: true)
+
+For more cleanup examples, see [PLAYBOOK_EXAMPLES.md](PLAYBOOK_EXAMPLES.md#cleanup-and-uninstallation).
 
 ## Security Considerations
 

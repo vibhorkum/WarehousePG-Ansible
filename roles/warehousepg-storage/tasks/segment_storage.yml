@@ -1,0 +1,104 @@
+---
+# Segment storage directory creation
+
+- name: Validate storage space for primary segments
+  include_tasks: validate_storage.yml
+  vars:
+    storage_path: "{{ whpg_primary_storage }}"
+    min_space_gb: "{{ whpg_min_segment_space_gb }}"
+  when: 
+    - whpg_validate_storage_space
+    - whpg_create_primary_dirs
+
+- name: Check if primary segment directory exists
+  stat:
+    path: "{{ whpg_primary_storage }}"
+  register: primary_dir_stat
+  when: whpg_create_primary_dirs
+
+- name: Fail if primary segment directory exists and force is not enabled
+  fail:
+    msg: "Primary segment directory {{ whpg_primary_storage }} already exists. Set whpg_force_create to true to continue."
+  when:
+    - whpg_create_primary_dirs
+    - primary_dir_stat.stat.exists
+    - not whpg_force_create
+
+- name: Create primary segment storage directory
+  file:
+    path: "{{ whpg_primary_storage }}"
+    state: directory
+    owner: "{{ whpg_storage_owner }}"
+    group: "{{ whpg_storage_group }}"
+    mode: "{{ whpg_storage_mode }}"
+  become: yes
+  when: whpg_create_primary_dirs
+
+- name: Create additional primary segment directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ whpg_storage_owner }}"
+    group: "{{ whpg_storage_group }}"
+    mode: "{{ whpg_storage_mode }}"
+  become: yes
+  loop: "{{ whpg_additional_primary_storage }}"
+  when: 
+    - whpg_create_primary_dirs
+    - whpg_additional_primary_storage | length > 0
+
+- name: Validate storage space for mirror segments
+  include_tasks: validate_storage.yml
+  vars:
+    storage_path: "{{ whpg_mirror_storage }}"
+    min_space_gb: "{{ whpg_min_mirror_space_gb }}"
+  when: 
+    - whpg_validate_storage_space
+    - whpg_create_mirror_dirs
+
+- name: Check if mirror segment directory exists
+  stat:
+    path: "{{ whpg_mirror_storage }}"
+  register: mirror_dir_stat
+  when: whpg_create_mirror_dirs
+
+- name: Fail if mirror segment directory exists and force is not enabled
+  fail:
+    msg: "Mirror segment directory {{ whpg_mirror_storage }} already exists. Set whpg_force_create to true to continue."
+  when:
+    - whpg_create_mirror_dirs
+    - mirror_dir_stat.stat.exists
+    - not whpg_force_create
+
+- name: Create mirror segment storage directory
+  file:
+    path: "{{ whpg_mirror_storage }}"
+    state: directory
+    owner: "{{ whpg_storage_owner }}"
+    group: "{{ whpg_storage_group }}"
+    mode: "{{ whpg_storage_mode }}"
+  become: yes
+  when: whpg_create_mirror_dirs
+
+- name: Create additional mirror segment directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ whpg_storage_owner }}"
+    group: "{{ whpg_storage_group }}"
+    mode: "{{ whpg_storage_mode }}"
+  become: yes
+  loop: "{{ whpg_additional_mirror_storage }}"
+  when: 
+    - whpg_create_mirror_dirs
+    - whpg_additional_mirror_storage | length > 0
+
+- name: Display segment storage information
+  debug:
+    msg:
+      - "Primary segment directory: {{ whpg_primary_storage if whpg_create_primary_dirs else 'Not created' }}"
+      - "Mirror segment directory: {{ whpg_mirror_storage if whpg_create_mirror_dirs else 'Not created' }}"
+      - "Owner: {{ whpg_storage_owner }}:{{ whpg_storage_group }}"
+      - "Permissions: {{ whpg_storage_mode }}"
+      - "Additional primary dirs: {{ whpg_additional_primary_storage | length }}"
+      - "Additional mirror dirs: {{ whpg_additional_mirror_storage | length }}"

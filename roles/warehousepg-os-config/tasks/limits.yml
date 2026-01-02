@@ -1,0 +1,42 @@
+---
+# System Resource Limits Configuration Tasks
+
+- name: Configure system resource limits in limits.conf
+  become: yes
+  pam_limits:
+    domain: '*'
+    limit_type: "{{ item.type }}"
+    limit_item: "{{ item.item }}"
+    value: "{{ item.value }}"
+  loop:
+    - { type: 'soft', item: 'nofile', value: "{{ whpg_nofile_soft }}" }
+    - { type: 'hard', item: 'nofile', value: "{{ whpg_nofile_hard }}" }
+    - { type: 'soft', item: 'nproc', value: "{{ whpg_nproc_soft }}" }
+    - { type: 'hard', item: 'nproc', value: "{{ whpg_nproc_hard }}" }
+    - { type: 'soft', item: 'core', value: "{{ whpg_core_limit }}" }
+
+- name: Check for RHEL nproc override file
+  stat:
+    path: /etc/security/limits.d/20-nproc.conf
+  register: nproc_override_file
+
+- name: Update nproc limits in override file if exists
+  become: yes
+  lineinfile:
+    path: /etc/security/limits.d/20-nproc.conf
+    regexp: '^\*\s+{{ item }}\s+nproc'
+    line: "*          {{ item }}    nproc     {{ whpg_nproc_soft if item == 'soft' else whpg_nproc_hard }}"
+    state: present
+  loop:
+    - soft
+    - hard
+  when: nproc_override_file.stat.exists
+
+- name: Verify ulimit settings
+  shell: ulimit -u
+  register: ulimit_check
+  changed_when: false
+
+- name: Display ulimit verification
+  debug:
+    msg: "Current ulimit -u (max user processes): {{ ulimit_check.stdout }}"

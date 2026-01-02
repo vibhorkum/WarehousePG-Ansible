@@ -1,0 +1,201 @@
+---
+# Sysctl Configuration Tasks
+
+- name: Gather system memory facts
+  setup:
+    filter: ansible_memtotal_mb
+
+- name: Calculate actual system memory in GB
+  set_fact:
+    actual_system_memory_gb: "{{ (ansible_memtotal_mb / 1024) | round(0, 'floor') | int }}"
+
+- name: Display detected system memory
+  debug:
+    msg: "Detected system memory: {{ actual_system_memory_gb }} GB ({{ ansible_memtotal_mb }} MB)"
+
+- name: Use detected memory if whpg_system_memory_gb not explicitly set
+  set_fact:
+    effective_system_memory_gb: "{{ whpg_system_memory_gb if whpg_system_memory_gb != 'auto' else actual_system_memory_gb }}"
+
+- name: Display effective memory for calculations
+  debug:
+    msg: "Using {{ effective_system_memory_gb }} GB for memory calculations"
+
+- name: Calculate shared memory parameters if not set
+  set_fact:
+    calculated_shmall: "{{ ((effective_system_memory_gb | int * 1024 * 1024 * 1024 / 4096) / 2) | int }}"
+    calculated_shmmax: "{{ ((effective_system_memory_gb | int * 1024 * 1024 * 1024) / 2) | int }}"
+  when: whpg_kernel_shmall == "" or whpg_kernel_shmmax == ""
+
+- name: Set shmall and shmmax values
+  set_fact:
+    final_shmall: "{{ whpg_kernel_shmall if whpg_kernel_shmall != '' else calculated_shmall }}"
+    final_shmmax: "{{ whpg_kernel_shmmax if whpg_kernel_shmmax != '' else calculated_shmmax }}"
+
+- name: Calculate vm.min_free_kbytes (3% of total RAM)
+  set_fact:
+    calculated_min_free_kbytes: "{{ ((whpg_system_memory_gb | int * 1024 * 1024) * (whpg_vm_min_free_kbytes_percent | int) / 100) | int }}"
+
+- name: Configure kernel shared memory parameters
+  become: yes
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.conf
+    reload: no
+  loop:
+    - { name: 'kernel.shmall', value: "{{ final_shmall }}" }
+    - { name: 'kernel.shmmax', value: "{{ final_shmmax }}" }
+    - { name: 'kernel.shmmni', value: "{{ whpg_kernel_shmmni }}" }
+
+- name: Configure memory overcommit parameters
+  become: yes
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.conf
+    reload: no
+  loop:
+    - { name: 'vm.overcommit_memory', value: "{{ whpg_vm_overcommit_memory }}" }
+    - { name: 'vm.overcommit_ratio', value: "{{ whpg_vm_overcommit_ratio }}" }
+
+- name: Configure port range parameters
+  become: yes
+  sysctl:
+    name: net.ipv4.ip_local_port_range
+    value: "{{ whpg_port_range_min }} {{ whpg_port_range_max }}"
+    state: present
+    sysctl_file: /etc/sysctl.conf
+    reload: no
+
+- name: Reserve Azure port if needed
+  become: yes
+  sysctl:
+    name: net.ipv4.ip_local_reserved_ports
+    value: "{{ whpg_reserved_port_azure }}"
+    state: present
+    sysctl_file: /etc/sysctl.conf
+    reload: no
+  when: "'azure' in group_names or 'Azure' in ansible_system_vendor | default('')"
+
+- name: Configure kernel semaphore parameters
+  become: yes
+  sysctl:
+    name: kernel.sem
+    value: "{{ whpg_kernel_sem }}"
+    state: present
+    sysctl_file: /etc/sysctl.conf
+    reload: no
+
+- name: Configure kernel message queue parameters
+  become: yes
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.conf
+    reload: no
+  loop:
+    - { name: 'kernel.msgmnb', value: "{{ whpg_kernel_msgmnb }}" }
+    - { name: 'kernel.msgmax', value: "{{ whpg_kernel_msgmax }}" }
+    - { name: 'kernel.msgmni', value: "{{ whpg_kernel_msgmni }}" }
+
+- name: Configure network parameters
+  become: yes
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.conf
+    reload: no
+  loop:
+    - { name: 'net.ipv4.tcp_syncookies', value: "{{ whpg_net_ipv4_tcp_syncookies }}" }
+    - { name: 'net.ipv4.conf.default.accept_source_route', value: "0" }
+    - { name: 'net.ipv4.tcp_max_syn_backlog', value: "{{ whpg_net_ipv4_tcp_max_syn_backlog }}" }
+    - { name: 'net.ipv4.conf.all.arp_filter', value: "{{ whpg_net_ipv4_conf_all_arp_filter }}" }
+    - { name: 'net.core.netdev_max_backlog', value: "{{ whpg_net_core_netdev_max_backlog }}" }
+    - { name: 'net.core.rmem_max', value: "{{ whpg_net_core_rmem_max }}" }
+    - { name: 'net.core.wmem_max', value: "{{ whpg_net_core_wmem_max }}" }
+
+- name: Configure IP fragmentation parameters
+  become: yes
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.conf
+    reload: no
+  loop:
+    - { name: 'net.ipv4.ipfrag_high_thresh', value: "{{ whpg_net_ipv4_ipfrag_high_thresh }}" }
+    - { name: 'net.ipv4.ipfrag_low_thresh', value: "{{ whpg_net_ipv4_ipfrag_low_thresh }}" }
+    - { name: 'net.ipv4.ipfrag_time', value: "{{ whpg_net_ipv4_ipfrag_time }}" }
+
+- name: Configure VM parameters
+  become: yes
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.conf
+    reload: no
+  loop:
+    - { name: 'vm.swappiness', value: "{{ whpg_vm_swappiness }}" }
+    - { name: 'vm.zone_reclaim_mode', value: "{{ whpg_vm_zone_reclaim_mode }}" }
+    - { name: 'vm.dirty_expire_centisecs', value: "{{ whpg_vm_dirty_expire_centisecs }}" }
+    - { name: 'vm.dirty_writeback_centisecs', value: "{{ whpg_vm_dirty_writeback_centisecs }}" }
+
+- name: Configure VM memory parameters for systems > 64GB RAM
+  become: yes
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.conf
+    reload: no
+  loop:
+    - { name: 'vm.dirty_background_ratio', value: "{{ whpg_vm_dirty_background_ratio }}" }
+    - { name: 'vm.dirty_ratio', value: "{{ whpg_vm_dirty_ratio }}" }
+    - { name: 'vm.dirty_background_bytes', value: "{{ whpg_vm_dirty_background_bytes }}" }
+    - { name: 'vm.dirty_bytes', value: "{{ whpg_vm_dirty_bytes }}" }
+  when: whpg_system_memory_gb | int > 64
+
+- name: Configure VM memory parameters for systems <= 64GB RAM
+  become: yes
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.conf
+    reload: no
+  loop:
+    - { name: 'vm.dirty_background_ratio', value: "{{ whpg_vm_dirty_background_ratio_small }}" }
+    - { name: 'vm.dirty_ratio', value: "{{ whpg_vm_dirty_ratio_small }}" }
+  when: whpg_system_memory_gb | int <= 64
+
+- name: Configure vm.min_free_kbytes
+  become: yes
+  sysctl:
+    name: vm.min_free_kbytes
+    value: "{{ calculated_min_free_kbytes }}"
+    state: present
+    sysctl_file: /etc/sysctl.conf
+    reload: no
+
+- name: Configure other kernel parameters
+  become: yes
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.conf
+    reload: no
+  loop:
+    - { name: 'kernel.sysrq', value: "{{ whpg_kernel_sysrq }}" }
+    - { name: 'kernel.core_uses_pid', value: "{{ whpg_kernel_core_uses_pid }}" }
+
+- name: Reload sysctl settings
+  become: yes
+  command: sysctl -p
+  changed_when: false

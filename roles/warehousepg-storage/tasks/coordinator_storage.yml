@@ -1,0 +1,46 @@
+---
+# Coordinator storage directory creation
+
+- name: Validate storage space for coordinator
+  include_tasks: validate_storage.yml
+  vars:
+    storage_path: "{{ whpg_coordinator_storage }}"
+    min_space_gb: "{{ whpg_min_coordinator_space_gb }}"
+  when: whpg_validate_storage_space
+
+- name: Check if coordinator storage directory exists
+  stat:
+    path: "{{ whpg_coordinator_storage }}"
+  register: coordinator_dir_stat
+
+- name: Fail if coordinator directory exists and force is not enabled
+  fail:
+    msg: "Coordinator directory {{ whpg_coordinator_storage }} already exists. Set whpg_force_create to true to continue."
+  when:
+    - coordinator_dir_stat.stat.exists
+    - not whpg_force_create
+
+- name: Create coordinator storage directory
+  file:
+    path: "{{ whpg_coordinator_storage }}"
+    state: directory
+    owner: "{{ whpg_storage_owner }}"
+    group: "{{ whpg_storage_group }}"
+    mode: "{{ whpg_storage_mode }}"
+  become: yes
+
+- name: Verify coordinator directory ownership
+  file:
+    path: "{{ whpg_coordinator_storage }}"
+    owner: "{{ whpg_storage_owner }}"
+    group: "{{ whpg_storage_group }}"
+    mode: "{{ whpg_storage_mode }}"
+    state: directory
+  become: yes
+
+- name: Display coordinator storage information
+  debug:
+    msg:
+      - "Coordinator storage directory: {{ whpg_coordinator_storage }}"
+      - "Owner: {{ whpg_storage_owner }}:{{ whpg_storage_group }}"
+      - "Permissions: {{ whpg_storage_mode }}"

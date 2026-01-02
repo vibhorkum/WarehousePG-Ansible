@@ -1,0 +1,29 @@
+---
+# Cleanup Mode - Set to true to uninstall/cleanup
+whpg_cleanup_mode: false
+whpg_cleanup_remove_user: false  # Remove gpadmin user during cleanup
+whpg_cleanup_remove_packages: true  # Remove WarehousePG packages during cleanup
+
+# User Management
+whpg_gpadmin_uid: 530
+whpg_gpadmin_gid: 530
+whpg_gpadmin_user: gpadmin
+whpg_gpadmin_password: ""  # Leave empty for passwordless, or set password (recommend using vault)
+whpg_gpadmin_home: "/home/gpadmin"
+
+# Network Configuration for /etc/hosts
+whpg_use_private_ip_for_hosts: false
+
+# EDB Repository
+edb_subscription_token: ""
+
+# WarehousePG Installation
+whpg_version: "7"
+whpg_install_path: "/usr/local/greenplum-db"
+whpg_rpm_version: "7.3.0-WHPG"
+
+# Packages to install
+whpg_packages:
+  - warehouse-pg-7
+  - warehouse-pg-clients
+  - whpg-backup

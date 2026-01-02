@@ -1,0 +1,71 @@
+---
+# WarehousePG Installation Tasks
+
+- name: Include cleanup tasks if cleanup mode is enabled
+  include_tasks: cleanup.yml
+  when: whpg_cleanup_mode | bool
+  tags: [cleanup, uninstall]
+
+- name: Skip installation tasks in cleanup mode
+  meta: end_play
+  when: whpg_cleanup_mode | bool
+
+- name: Include user management tasks
+  include_tasks: user_management.yml
+  tags: [user]
+
+- name: Include /etc/hosts configuration
+  include_tasks: configure_hosts.yml
+  tags: [hosts]
+
+- name: Install EPEL repository
+  become: yes
+  dnf:
+    name: "https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm"
+    state: present
+    disable_gpg_check: yes
+
+- name: Enable CRB (CodeReady Builder) repository
+  become: yes
+  command: dnf config-manager --set-enabled crb
+  changed_when: false
+  failed_when: false
+
+- name: Validate EDB subscription token is provided
+  fail:
+    msg: "EDB subscription token is required. Please set edb_subscription_token variable."
+  when: edb_subscription_token == ""
+
+- name: Setup EDB repository
+  become: yes
+  shell: |
+    export EDB_SUBSCRIPTION_TOKEN="{{ edb_subscription_token }}"
+    curl -1sSLf "https://downloads.enterprisedb.com/$EDB_SUBSCRIPTION_TOKEN/gpsupp/setup.rpm.sh" | bash
+  args:
+    executable: /bin/bash
+    creates: /etc/yum.repos.d/enterprisedb-gpsupp.repo
+
+- name: Clean DNF cache
+  become: yes
+  command: dnf clean all
+  changed_when: false
+
+- name: Install WarehousePG packages
+  become: yes
+  dnf:
+    name: "{{ whpg_packages }}"
+    state: present
+    update_cache: yes
+
+- name: Verify WarehousePG installation
+  command: "{{ whpg_install_path }}/bin/postgres --version"
+  register: whpg_version_check
+  changed_when: false
+
+- name: Display WarehousePG version
+  debug:
+    msg: "{{ whpg_version_check.stdout }}"
+
+- name: Include passwordless SSH configuration
+  include_tasks: passwordless_ssh.yml
+  tags: [ssh]

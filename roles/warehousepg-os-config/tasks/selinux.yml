@@ -1,0 +1,49 @@
+---
+# SELinux Configuration Tasks
+
+- name: Check current SELinux status
+  command: getenforce
+  register: selinux_status
+  changed_when: false
+  failed_when: false
+
+- name: Display current SELinux status
+  debug:
+    msg: "Current SELinux status: {{ selinux_status.stdout }}"
+
+- name: Set SELinux to {{ whpg_selinux_state }} in config file
+  become: yes
+  lineinfile:
+    path: /etc/selinux/config
+    regexp: '^SELINUX='
+    line: "SELINUX={{ whpg_selinux_state }}"
+    state: present
+  when: whpg_selinux_state in ['disabled', 'enforcing', 'permissive']
+
+- name: Configure SSSD selinux_provider if SSSD is installed
+  become: yes
+  lineinfile:
+    path: /etc/sssd/sssd.conf
+    regexp: '^selinux_provider\s*='
+    line: "selinux_provider = {{ whpg_selinux_provider_sssd }}"
+    state: present
+    create: no
+  when:
+    - whpg_selinux_state == 'disabled'
+  failed_when: false
+
+- name: Set SELinux to permissive mode immediately (if not disabled)
+  become: yes
+  command: setenforce 0
+  when:
+    - whpg_selinux_state == 'permissive'
+    - selinux_status.stdout != 'Permissive'
+    - selinux_status.stdout != 'Disabled'
+  failed_when: false
+
+- name: Notify about reboot for SELinux changes
+  debug:
+    msg: "SELinux configuration changed. A system reboot is required to fully apply changes."
+  when:
+    - whpg_selinux_state == 'disabled'
+    - selinux_status.stdout != 'Disabled'

@@ -1,0 +1,76 @@
+---
+# Cleanup Tasks for WarehousePG Storage
+
+- name: Warning message for data deletion
+  debug:
+    msg:
+      - "WARNING: Storage cleanup is enabled"
+      - "Remove data directories: {{ whpg_cleanup_remove_data }}"
+      - "This operation may result in DATA LOSS if whpg_cleanup_remove_data is true"
+  when: whpg_cleanup_mode | bool
+
+- name: Confirm data deletion intent
+  pause:
+    prompt: "Press ENTER to continue with storage cleanup, or Ctrl+C to abort"
+  when: 
+    - whpg_cleanup_mode | bool
+    - whpg_cleanup_remove_data | bool
+
+- name: Remove coordinator storage directory
+  become: yes
+  file:
+    path: "{{ whpg_coordinator_storage }}"
+    state: absent
+  when:
+    - whpg_cleanup_mode | bool
+    - whpg_cleanup_remove_data | bool
+    - "'whpg_primary_coordinator' in group_names or 'whpg_dr_coordinator' in group_names"
+
+- name: Remove primary segment storage directory
+  become: yes
+  file:
+    path: "{{ whpg_primary_storage }}"
+    state: absent
+  when:
+    - whpg_cleanup_mode | bool
+    - whpg_cleanup_remove_data | bool
+    - "'whpg_primary_segments' in group_names or 'whpg_dr_segments' in group_names"
+
+- name: Remove mirror segment storage directory
+  become: yes
+  file:
+    path: "{{ whpg_mirror_storage }}"
+    state: absent
+  when:
+    - whpg_cleanup_mode | bool
+    - whpg_cleanup_remove_data | bool
+    - "'whpg_primary_segments' in group_names or 'whpg_dr_segments' in group_names"
+
+- name: Remove additional primary storage directories
+  become: yes
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ whpg_additional_primary_storage }}"
+  when:
+    - whpg_cleanup_mode | bool
+    - whpg_cleanup_remove_data | bool
+    - whpg_additional_primary_storage | length > 0
+
+- name: Remove additional mirror storage directories
+  become: yes
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ whpg_additional_mirror_storage }}"
+  when:
+    - whpg_cleanup_mode | bool
+    - whpg_cleanup_remove_data | bool
+    - whpg_additional_mirror_storage | length > 0
+
+- name: Display storage cleanup completion
+  debug:
+    msg:
+      - "Storage cleanup completed"
+      - "Data directories removed: {{ whpg_cleanup_remove_data }}"
+  when: whpg_cleanup_mode | bool

@@ -1,0 +1,20 @@
+---
+# Core Dump Configuration Tasks
+
+- name: Create core dump directory
+  become: yes
+  file:
+    path: "{{ whpg_core_dump_directory }}"
+    state: directory
+    mode: '1777'
+    owner: root
+    group: root
+
+- name: Configure kernel core dump pattern
+  become: yes
+  sysctl:
+    name: kernel.core_pattern
+    value: "{{ whpg_core_dump_pattern }}"
+    state: present
+    sysctl_file: /etc/sysctl.conf
+    reload: yes

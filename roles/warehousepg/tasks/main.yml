@@ -9,10 +9,6 @@
   include_tasks: dependencies.yml
   tags: [warehousepg, dependencies]
 
-- name: Include WarehousePG installation tasks
-  include_tasks: install_warehousepg.yml
-  tags: [warehousepg, install]
-
 - name: Include environment configuration tasks
   include_tasks: configure_environment.yml
   tags: [warehousepg, configure]
@@ -20,14 +16,14 @@
 - name: Include cluster initialization tasks
   include_tasks: initialize_cluster.yml
   tags: [warehousepg, cluster]
-  when: "'primary-coordinator' in group_names"
+  when: "'whpg_primary_coordinator' in group_names"
 
 - name: Include standby coordinator setup tasks
   include_tasks: setup_standby.yml
   tags: [warehousepg, standby]
-  when: "'standby-coordinator' in group_names"
+  when: "'whpg_primary_coordinator' in group_names or 'whpg_dr_coordinator' in group_names"
 
 - name: Include remote access configuration tasks
   include_tasks: configure_access.yml
   tags: [warehousepg, access]
-  when: "'primary-coordinator' in group_names"
+  when: "'whpg_primary_coordinator' in group_names"

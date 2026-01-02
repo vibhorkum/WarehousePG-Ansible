@@ -1,0 +1,56 @@
+---
+# User Management Tasks
+
+- name: Create gpadmin group
+  become: yes
+  group:
+    name: "{{ whpg_gpadmin_user }}"
+    gid: "{{ whpg_gpadmin_gid }}"
+    state: present
+
+- name: Create gpadmin user
+  become: yes
+  user:
+    name: "{{ whpg_gpadmin_user }}"
+    uid: "{{ whpg_gpadmin_uid }}"
+    group: "{{ whpg_gpadmin_user }}"
+    home: "{{ whpg_gpadmin_home }}"
+    shell: /bin/bash
+    system: yes
+    create_home: yes
+    state: present
+
+- name: Set password for gpadmin user
+  become: yes
+  user:
+    name: "{{ whpg_gpadmin_user }}"
+    password: "{{ whpg_gpadmin_password | password_hash('sha512') }}"
+    update_password: always
+  when: 
+    - whpg_gpadmin_password is defined
+    - whpg_gpadmin_password | length > 0
+
+- name: Verify gpadmin user creation
+  command: id {{ whpg_gpadmin_user }}
+  register: gpadmin_id
+  changed_when: false
+
+- name: Display gpadmin user info
+  debug:
+    msg: "{{ gpadmin_id.stdout }}"
+
+- name: Ensure wheel group has NOPASSWD sudo access
+  become: yes
+  lineinfile:
+    path: /etc/sudoers
+    state: present
+    regexp: '^%wheel\s+ALL=\(ALL\)\s+NOPASSWD:\s+ALL'
+    line: '%wheel  ALL=(ALL)       NOPASSWD: ALL'
+    validate: 'visudo -cf %s'
+
+- name: Add gpadmin to wheel group
+  become: yes
+  user:
+    name: "{{ whpg_gpadmin_user }}"
+    groups: wheel
+    append: yes

@@ -6,13 +6,12 @@ whpg_gpadmin_user: gpadmin
 whpg_gpadmin_password: "NewPassword@123"
 whpg_gpadmin_home: "/home/{{ whpg_gpadmin_user }}"
 
-# EDB Repository
-edb_subscription_token: ""
+# Network Configuration for /etc/hosts
+# Set to true to use private_ip for /etc/hosts, false to use ansible_host (public IP)
+whpg_use_private_ip_for_hosts: false
 
-# WarehousePG Installation
-whpg_version: "7"
+# WarehousePG Installation (managed by warehousepg-install role)
 whpg_install_path: "/usr/local/greenplum-db"
-whpg_rpm_version: "7.3.0-WHPG"
 
 # Cluster Configuration
 whpg_cluster_name: "WarehousePG_Cluster"
@@ -55,9 +54,3 @@ whpg_dependencies:
   - xerces-c-devel
   - perl-FindBin
   - perl-core
-
-# Packages to install
-whpg_packages:
-  - warehouse-pg-7
-  - warehouse-pg-clients
-  - whpg-backup

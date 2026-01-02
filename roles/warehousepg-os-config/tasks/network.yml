@@ -1,0 +1,32 @@
+---
+# Network Configuration Tasks
+
+- name: Configure MTU for network interfaces
+  become: yes
+  command: "ip link set {{ item }} mtu {{ whpg_network_mtu }}"
+  loop: "{{ whpg_network_interfaces }}"
+  when: whpg_network_interfaces | length > 0
+  changed_when: true
+
+- name: Make MTU settings persistent in network config
+  become: yes
+  lineinfile:
+    path: "/etc/sysconfig/network-scripts/ifcfg-{{ item }}"
+    regexp: '^MTU='
+    line: "MTU={{ whpg_network_mtu }}"
+    state: present
+  loop: "{{ whpg_network_interfaces }}"
+  when: whpg_network_interfaces | length > 0
+
+- name: Verify MTU settings
+  command: "ip link show {{ item }}"
+  loop: "{{ whpg_network_interfaces }}"
+  register: mtu_verify
+  changed_when: false
+  when: whpg_network_interfaces | length > 0
+
+- name: Display MTU settings
+  debug:
+    msg: "{{ item.stdout_lines }}"
+  loop: "{{ mtu_verify.results }}"
+  when: whpg_network_interfaces | length > 0

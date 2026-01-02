@@ -1,0 +1,103 @@
+---
+# Sample Playbook: WarehousePG Installation and Configuration
+# This playbook demonstrates the complete installation and configuration workflow
+
+- name: Configure OS for WarehousePG
+  hosts: whpg_primary_site
+  become: yes
+  roles:
+    - role: warehousepg-os-config
+      tags: [os-config]
+
+- name: Install WarehousePG
+  hosts: whpg_primary_site
+  become: yes
+  roles:
+    - role: warehousepg-install
+      tags: [install]
+
+- name: Create Storage Directories
+  hosts: whpg_primary_site
+  become: yes
+  roles:
+    - role: warehousepg-storage
+      tags: [storage]
+
+- name: Setup WarehousePG Users and Environment
+  hosts: whpg_primary_site:whpg_dr_site
+  become: yes
+  roles:
+    - role: warehousepg
+      tags: [warehousepg, setup]
+  vars:
+    # Only run user management, dependencies, and environment configuration
+    # Skip cluster initialization and standby setup for now
+    ansible_run_tags: [user, dependencies, configure]
+
+- name: Initialize Primary Cluster
+  hosts: whpg_primary_coordinator
+  become: yes
+  roles:
+    - role: warehousepg
+      tags: [cluster-init]
+  vars:
+    ansible_run_tags: [cluster]
+
+- name: Configure Remote Access
+  hosts: whpg_primary_coordinator
+  become: yes
+  roles:
+    - role: warehousepg
+      tags: [access-config]
+  vars:
+    ansible_run_tags: [access]
+
+- name: Setup Standby Coordinator
+  hosts: whpg_primary_coordinator:whpg_dr_coordinator
+  become: yes
+  roles:
+    - role: warehousepg
+      tags: [standby-setup]
+  vars:
+    ansible_run_tags: [standby]
+
+# Example: DR Site Setup (if needed)
+# Uncomment and customize as needed
+# - name: Initialize DR Cluster
+#   hosts: whpg_dr_coordinator
+#   become: yes
+#   roles:
+#     - role: warehousepg
+#       tags: [dr-cluster-init]
+#   vars:
+#     ansible_run_tags: [cluster]
+
+# Example: Post-installation validation
+- name: Validate Installation
+  hosts: whpg_primary_coordinator
+  become: yes
+  become_user: gpadmin
+  tasks:
+    - name: Check WarehousePG version
+      command: psql --version
+      register: psql_version
+      changed_when: false
+      tags: [validate]
+
+    - name: Display WarehousePG version
+      debug:
+        msg: "{{ psql_version.stdout }}"
+      tags: [validate]
+
+    - name: Check cluster status (if initialized)
+      command: gpstate -Q
+      register: cluster_status
+      changed_when: false
+      failed_when: false
+      tags: [validate]
+
+    - name: Display cluster status
+      debug:
+        msg: "{{ cluster_status.stdout_lines }}"
+      when: cluster_status.rc == 0
+      tags: [validate]

@@ -1,0 +1,31 @@
+---
+# handlers file for warehousepg-os-config
+
+- name: reload sysctl
+  become: yes
+  command: sysctl -p
+  changed_when: false
+
+- name: restart sshd
+  become: yes
+  systemd:
+    name: sshd
+    state: restarted
+
+- name: restart chronyd
+  become: yes
+  systemd:
+    name: chronyd
+    state: restarted
+
+- name: restart ntpd
+  become: yes
+  systemd:
+    name: ntpd
+    state: restarted
+
+- name: reboot system
+  become: yes
+  reboot:
+    msg: "Rebooting to apply OS configuration changes"
+    reboot_timeout: 600
