@@ -1,0 +1,66 @@
+---
+# Network Performance Validation Tasks
+
+- name: Run gpcheckperf network performance test
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  shell: |
+    source {{ whpg_install_path }}/greenplum_path.sh
+    gpcheckperf -f {{ whpg_hostfile_path }} -r {{ whpg_network_test_mode }} -d {{ whpg_network_test_dir }} > {{ whpg_network_output_file }} 2>&1
+    echo "Exit code: $?"
+  args:
+    executable: /bin/bash
+  register: network_test_result
+  changed_when: false
+  when: inventory_hostname in groups['whpg_primary_coordinator']
+  ignore_errors: yes
+
+- name: Read network test output
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  slurp:
+    src: "{{ whpg_network_output_file }}"
+  register: network_output
+  when: inventory_hostname in groups['whpg_primary_coordinator']
+
+- name: Parse network test results
+  set_fact:
+    network_test_output: "{{ network_output.content | b64decode }}"
+  when: inventory_hostname in groups['whpg_primary_coordinator']
+
+- name: Display network test results
+  debug:
+    msg: "{{ network_test_output.split('\n') }}"
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - network_test_output is defined
+
+- name: Extract network bandwidth metrics
+  set_fact:
+    network_bandwidth: "{{ network_test_output | regex_search('Median = ([0-9.]+)', '\\1') | first | default('0') }}"
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - network_test_output is defined
+
+- name: Validate network performance meets minimum threshold
+  assert:
+    that:
+      - network_bandwidth | float >= whpg_min_network_bandwidth
+    fail_msg: "Network bandwidth ({{ network_bandwidth }} MB/s) is below minimum threshold ({{ whpg_min_network_bandwidth }} MB/s)"
+    success_msg: "Network bandwidth ({{ network_bandwidth }} MB/s) meets minimum requirements"
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - network_bandwidth is defined
+    - network_bandwidth != '0'
+  ignore_errors: yes
+
+- name: Save network test results to validation report
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  copy:
+    content: "{{ network_test_output }}"
+    dest: "{{ whpg_validation_report_dir }}/network_validation_{{ whpg_validation_timestamp }}.txt"
+    mode: '0644'
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - network_test_output is defined

@@ -1,0 +1,53 @@
+---
+# Create configuration files for gpinitsystem
+
+- name: Create gpconfigs directory
+  become: true
+  become_user: gpadmin
+  ansible.builtin.file:
+    path: "{{ whpg_config_dir }}"
+    state: directory
+    owner: gpadmin
+    group: gpadmin
+    mode: '0755'
+
+- name: Generate gpinitsystem configuration file
+  become: true
+  become_user: gpadmin
+  ansible.builtin.template:
+    src: gpinitsystem_config.j2
+    dest: "{{ whpg_config_dir }}/gpinitsystem_config"
+    owner: gpadmin
+    group: gpadmin
+    mode: '0644'
+
+- name: Generate hostfile for gpinitsystem
+  become: true
+  become_user: gpadmin
+  ansible.builtin.template:
+    src: hostfile_gpinitsystem.j2
+    dest: "{{ whpg_config_dir }}/hostfile_gpinitsystem"
+    owner: gpadmin
+    group: gpadmin
+    mode: '0644'
+
+- name: Generate mirror hostfile for DR site
+  become: true
+  become_user: gpadmin
+  ansible.builtin.template:
+    src: hostfile_mirror_segments.j2
+    dest: "{{ whpg_config_dir }}/hostfile_mirror_segments"
+    owner: gpadmin
+    group: gpadmin
+    mode: '0644'
+  when: 
+    - whpg_enable_mirrors
+    - whpg_use_dr_site_mirrors
+
+- name: Display configuration file location
+  ansible.builtin.debug:
+    msg: |
+      Configuration files created:
+        - {{ whpg_config_dir }}/gpinitsystem_config
+        - {{ whpg_config_dir }}/hostfile_gpinitsystem
+      {% if whpg_enable_mirrors and whpg_use_dr_site_mirrors %}  - {{ whpg_config_dir }}/hostfile_mirror_segments{% endif %}

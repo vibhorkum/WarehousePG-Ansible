@@ -1,63 +1,94 @@
 ---
 # Cleanup/Uninstall Playbook for WarehousePG
-# WARNING: This will remove WarehousePG installation and optionally data directories
+# This playbook removes WarehousePG installation and optionally restores system defaults
 #
-# Usage:
-#   # Cleanup packages only (keep data and user)
+# Usage Examples:
+#   # Basic cleanup (packages only, keep user and data)
 #   ansible-playbook -i inventory.yml cleanup.yml
 #
-#   # Full cleanup including user (but keep data)
+#   # Cleanup with user removal (keep data)
 #   ansible-playbook -i inventory.yml cleanup.yml -e "whpg_cleanup_remove_user=true"
 #
-#   # DANGEROUS: Full cleanup including data deletion
-#   ansible-playbook -i inventory.yml cleanup.yml -e "whpg_cleanup_remove_user=true whpg_cleanup_remove_data=true"
+#   # Cleanup with data removal (keep user)
+#   ansible-playbook -i inventory.yml cleanup.yml -e "whpg_cleanup_remove_data=true"
+#
+#   # Full cleanup (DANGEROUS: removes everything including data)
+#   ansible-playbook -i inventory.yml cleanup.yml \
+#     -e "whpg_cleanup_remove_user=true" \
+#     -e "whpg_cleanup_remove_data=true"
+#
+#   # Cleanup specific components only
+#   ansible-playbook -i inventory.yml cleanup.yml --tags storage-cleanup
+#   ansible-playbook -i inventory.yml cleanup.yml --tags install-cleanup
+#   ansible-playbook -i inventory.yml cleanup.yml --tags os-cleanup
 
-- name: WarehousePG Cleanup - Stop Cluster and Remove Installation
+- name: WarehousePG Cleanup and Uninstallation
   hosts: whpg_primary_site:whpg_dr_site
   become: yes
   vars:
     whpg_cleanup_mode: true
+    whpg_cleanup_remove_packages: true
+    whpg_cleanup_remove_user: false
+    whpg_cleanup_remove_data: false
+    whpg_cleanup_restore_defaults: true
   
   pre_tasks:
-    - name: Display cleanup warning
+    - name: Display cleanup start message
+      debug:
+        msg: 
+          - "========================================="
+          - "Starting WarehousePG cleanup on {{ inventory_hostname }}"
+          - "========================================="
+          - ""
+          - "Cleanup Configuration:"
+          - "  - Remove packages: {{ whpg_cleanup_remove_packages }}"
+          - "  - Remove user (gpadmin): {{ whpg_cleanup_remove_user }}"
+          - "  - Remove data directories: {{ whpg_cleanup_remove_data }}"
+          - "  - Restore OS defaults: {{ whpg_cleanup_restore_defaults }}"
+          - ""
+          - "Groups: {{ group_names }}"
+      tags: [always]
+    
+    - name: Confirm cleanup action
       pause:
         prompt: |
           
-          ╔═══════════════════════════════════════════════════════════════╗
-          ║               WARNING: CLEANUP MODE ENABLED                   ║
-          ╠═══════════════════════════════════════════════════════════════╣
-          ║ This will remove WarehousePG from {{ inventory_hostname }}   ║
-          ║                                                               ║
-          ║ Cleanup Settings:                                            ║
-          ║   - Remove packages: {{ whpg_cleanup_remove_packages | default(true) }}                                     ║
-          ║   - Remove user: {{ whpg_cleanup_remove_user | default(false) }}                                         ║
-          ║   - Remove data: {{ whpg_cleanup_remove_data | default(false) }}                                         ║
-          ║                                                               ║
-          ║ Press ENTER to continue or Ctrl+C to abort                   ║
-          ╚═══════════════════════════════════════════════════════════════╝
+          ⚠️  WARNING: CLEANUP MODE ENABLED ⚠️
+          
+          This will remove WarehousePG from: {{ inventory_hostname }}
+          
+          Press ENTER to continue or Ctrl+C to abort
+      tags: [always]
 
   roles:
     # Cleanup in reverse order of installation
+    # Each role conditionally executes cleanup based on whpg_cleanup_* flags
+    
+    # Step 1: Storage cleanup (removes data directories)
     - role: warehousepg-storage
       tags: [storage-cleanup]
       
+    # Step 2: Installation cleanup (removes packages, user, configs)
     - role: warehousepg-install
       tags: [install-cleanup]
       
+    # Step 3: OS configuration cleanup (restores system settings)
     - role: warehousepg-os-config
       tags: [os-cleanup]
 
   post_tasks:
-    - name: Display cleanup summary
+    - name: Display cleanup completion summary
       debug:
         msg:
-          - "╔═══════════════════════════════════════════════════════════════╗"
-          - "║            CLEANUP COMPLETED ON {{ inventory_hostname }}      ║"
-          - "╚═══════════════════════════════════════════════════════════════╝"
+          - "========================================="
+          - "CLEANUP COMPLETED ON {{ inventory_hostname }}"
+          - "========================================="
           - ""
-          - "Cleanup Summary:"
-          - "  - Packages removed: {{ whpg_cleanup_remove_packages | default(true) }}"
-          - "  - User removed: {{ whpg_cleanup_remove_user | default(false) }}"
-          - "  - Data removed: {{ whpg_cleanup_remove_data | default(false) }}"
+          - "Actions performed:"
+          - "  ✓ Packages removed: {{ whpg_cleanup_remove_packages }}"
+          - "  ✓ User removed: {{ whpg_cleanup_remove_user }}"
+          - "  ✓ Data removed: {{ whpg_cleanup_remove_data }}"
+          - "  ✓ OS defaults restored: {{ whpg_cleanup_restore_defaults }}"
           - ""
-          - "{{ 'NOTE: A reboot is recommended to fully restore OS settings' if whpg_cleanup_restore_defaults | default(true) else '' }}"
+          - "{{ 'NOTE: A system reboot is recommended to fully restore OS settings' if whpg_cleanup_restore_defaults else '' }}"
+      tags: [always]

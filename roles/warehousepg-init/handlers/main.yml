@@ -1,0 +1,11 @@
+---
+# Handlers for warehousepg-init role
+
+- name: reload gpadmin bashrc
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: |
+    source ~/.bashrc
+  args:
+    executable: /bin/bash
+  changed_when: false

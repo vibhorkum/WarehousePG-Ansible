@@ -2,18 +2,25 @@
 # Validate storage space
 
 - name: Get filesystem information for storage path
-  shell: df -BG {{ storage_path | dirname }} | tail -1 | awk '{print $4}' | sed 's/G//'
+  ansible.builtin.shell: >-
+    if [ -d "{{ storage_path }}" ]; then
+      df -BG "{{ storage_path }}" | tail -1 | awk '{print $4}' | sed 's/G//';
+    else
+      df -BG "{{ storage_path | dirname }}" 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//' || df -BG / | tail -1 | awk '{print $4}' | sed 's/G//';
+    fi
+  args:
+    executable: /bin/bash
   register: available_space
   changed_when: false
-  failed_when: false
 
 - name: Display available storage space
-  debug:
+  ansible.builtin.debug:
     msg: "Available space at {{ storage_path }}: {{ available_space.stdout }}GB (Required: {{ min_space_gb }}GB)"
 
 - name: Verify sufficient storage space
-  fail:
+  ansible.builtin.fail:
     msg: "Insufficient storage space. Available: {{ available_space.stdout }}GB, Required: {{ min_space_gb }}GB"
   when: 
     - available_space.stdout is defined
+    - available_space.stdout | length > 0
     - available_space.stdout | int < min_space_gb | int

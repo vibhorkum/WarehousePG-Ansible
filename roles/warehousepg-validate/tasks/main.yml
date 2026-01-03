@@ -1,0 +1,29 @@
+---
+# Main tasks file for warehousepg-validate
+
+- name: Display validation start message
+  debug:
+    msg:
+      - "Starting WarehousePG cluster validation on {{ inventory_hostname }}"
+      - "Network test: {{ whpg_validate_network }}"
+      - "Disk I/O test: {{ whpg_validate_disk }}"
+      - "Memory bandwidth test: {{ whpg_validate_memory }}"
+  when: inventory_hostname in groups['whpg_primary_coordinator']
+
+- name: Include validation prerequisites
+  include_tasks: prerequisites.yml
+  tags: [validate-prerequisites]
+
+- name: Include network validation
+  include_tasks: network_validation.yml
+  when: whpg_validate_network | bool
+  tags: [validate-network]
+
+- name: Include disk and memory validation
+  include_tasks: disk_memory_validation.yml
+  when: whpg_validate_disk | bool or whpg_validate_memory | bool
+  tags: [validate-disk, validate-memory]
+
+- name: Include validation report generation
+  include_tasks: generate_report.yml
+  tags: [validate-report]

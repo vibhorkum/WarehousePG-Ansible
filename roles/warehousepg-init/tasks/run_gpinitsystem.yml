@@ -1,0 +1,84 @@
+---
+# Run gpinitsystem utility to initialize WarehousePG cluster
+
+- name: Source greenplum_path and check gpinitsystem availability
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: |
+    source {{ whpg_gphome }}/greenplum_path.sh
+    which gpinitsystem
+  args:
+    executable: /bin/bash
+  register: gpinitsystem_check
+  changed_when: false
+
+- name: Display gpinitsystem location
+  ansible.builtin.debug:
+    msg: "gpinitsystem utility found at: {{ gpinitsystem_check.stdout }}"
+
+- name: Build gpinitsystem command
+  ansible.builtin.set_fact:
+    gpinitsystem_cmd: >-
+      source {{ whpg_gphome }}/greenplum_path.sh &&
+      gpinitsystem
+      -c {{ whpg_config_dir }}/gpinitsystem_config
+      -h {{ whpg_config_dir }}/hostfile_gpinitsystem
+      {% if whpg_enable_mirrors and whpg_use_dr_site_mirrors %}-m {{ whpg_config_dir }}/hostfile_mirror_segments{% endif %}
+      {% if whpg_save_config %}-O {{ whpg_output_config_file }}{% endif %}
+      {% if whpg_standby_coordinator_hostname %}-s {{ whpg_standby_coordinator_hostname }}{% endif %}
+      {% if whpg_enable_mirrors and not whpg_use_dr_site_mirrors %}--mirror-mode={{ whpg_mirror_mode }}{% endif %}
+      {% if whpg_enable_mirrors and whpg_use_dr_site_mirrors %}--mirror-mode=spread{% endif %}
+      -a
+
+- name: Display gpinitsystem command
+  ansible.builtin.debug:
+    msg: "Running: {{ gpinitsystem_cmd }}"
+
+- name: Initialize WarehousePG cluster with gpinitsystem
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: "{{ gpinitsystem_cmd }}"
+  args:
+    executable: /bin/bash
+  register: gpinitsystem_output
+  changed_when: "'Greenplum Database instance successfully created' in gpinitsystem_output.stdout or 'WarehousePG instance successfully created' in gpinitsystem_output.stdout"
+  failed_when: gpinitsystem_output.rc != 0
+
+- name: Display gpinitsystem output
+  ansible.builtin.debug:
+    var: gpinitsystem_output.stdout_lines
+
+- name: Check for backout script
+  become: true
+  become_user: gpadmin
+  ansible.builtin.find:
+    paths: /home/gpadmin/gpAdminLogs
+    patterns: 'backout_gpinitsystem_*'
+    file_type: file
+  register: backout_scripts
+  when: gpinitsystem_output.rc != 0
+
+- name: Display backout script information
+  ansible.builtin.debug:
+    msg: |
+      Initialization failed. Backout script created at:
+      {{ backout_scripts.files[0].path if backout_scripts.files else 'No backout script found' }}
+      Run this script to clean up partial installation.
+  when: 
+    - gpinitsystem_output.rc != 0
+    - backout_scripts.files | length > 0
+
+- name: Verify coordinator data directory was created
+  become: true
+  become_user: gpadmin
+  ansible.builtin.stat:
+    path: "{{ whpg_coordinator_directory }}/gpseg-1"
+  register: verify_coordinator_dir
+
+- name: Assert coordinator directory exists
+  ansible.builtin.assert:
+    that:
+      - verify_coordinator_dir.stat.exists
+      - verify_coordinator_dir.stat.isdir
+    fail_msg: "Coordinator data directory was not created successfully"
+    success_msg: "WarehousePG cluster initialized successfully"

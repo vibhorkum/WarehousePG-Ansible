@@ -12,9 +12,17 @@ whpg_gpadmin_password: ""  # Leave empty for passwordless, or set password (reco
 whpg_gpadmin_home: "/home/gpadmin"
 
 # Network Configuration for /etc/hosts
-whpg_use_private_ip_for_hosts: false
+# Options: 'private_ip' or 'ansible_host'
+# private_ip: Use private IP address (default, requires private_ip defined in inventory)
+# ansible_host: Use ansible connection address (public IP or hostname)
+whpg_hosts_ip_preference: "private_ip"
 
-# EDB Repository
+# EDB Repository Token
+# REQUIRED: Pass this when calling the role
+# Example: 
+#   - role: warehousepg-install
+#     vars:
+#       edb_subscription_token: "your-token-here"
 edb_subscription_token: ""
 
 # WarehousePG Installation

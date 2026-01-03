@@ -1,14 +1,28 @@
 ---
 # /etc/hosts Configuration Tasks
 
+- name: Set system hostname from inventory
+  become: yes
+  ansible.builtin.hostname:
+    name: "{{ hostname | default(inventory_hostname) }}"
+  when: hostname is defined
+
+- name: Backup /etc/hosts before making changes
+  become: yes
+  copy:
+    src: /etc/hosts
+    dest: /etc/hosts.whpg_backup
+    remote_src: yes
+    force: no
+  ignore_errors: yes
+
 - name: Add primary coordinator hosts to /etc/hosts
   become: yes
   lineinfile:
     path: /etc/hosts
-    line: "{{ (whpg_use_private_ip_for_hosts and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {{ item }}"
+    line: "{{ ((hostvars[item].use_private_ip | default(whpg_hosts_ip_preference == 'private_ip')) and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {{ item }}"
     regexp: "^.*\\s+{{ hostvars[item].hostname | default(item) }}(\\s|$)"
     state: present
-    backup: yes
   loop: "{{ groups['whpg_primary_coordinator'] | default([]) }}"
   when: groups['whpg_primary_coordinator'] is defined
 
@@ -16,10 +30,9 @@
   become: yes
   lineinfile:
     path: /etc/hosts
-    line: "{{ (whpg_use_private_ip_for_hosts and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {{ item }}"
+    line: "{{ ((hostvars[item].use_private_ip | default(whpg_hosts_ip_preference == 'private_ip')) and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {{ item }}"
     regexp: "^.*\\s+{{ hostvars[item].hostname | default(item) }}(\\s|$)"
     state: present
-    backup: yes
   loop: "{{ groups['whpg_primary_segments'] | default([]) }}"
   when: groups['whpg_primary_segments'] is defined
 
@@ -27,10 +40,9 @@
   become: yes
   lineinfile:
     path: /etc/hosts
-    line: "{{ (whpg_use_private_ip_for_hosts and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {{ item }}"
+    line: "{{ ((hostvars[item].use_private_ip | default(whpg_hosts_ip_preference == 'private_ip')) and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {{ item }}"
     regexp: "^.*\\s+{{ hostvars[item].hostname | default(item) }}(\\s|$)"
     state: present
-    backup: yes
   loop: "{{ groups['whpg_dr_coordinator'] | default([]) }}"
   when: groups['whpg_dr_coordinator'] is defined
 
@@ -38,9 +50,15 @@
   become: yes
   lineinfile:
     path: /etc/hosts
-    line: "{{ (whpg_use_private_ip_for_hosts and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {{ item }}"
+    line: "{{ ((hostvars[item].use_private_ip | default(whpg_hosts_ip_preference == 'private_ip')) and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {{ item }}"
     regexp: "^.*\\s+{{ hostvars[item].hostname | default(item) }}(\\s|$)"
     state: present
-    backup: yes
   loop: "{{ groups['whpg_dr_segments'] | default([]) }}"
   when: groups['whpg_dr_segments'] is defined
+
+- name: Display /etc/hosts configuration summary
+  debug:
+    msg:
+      - "Updated /etc/hosts with IP addresses based on use_private_ip flag (per-host) or global preference"
+      - "Global preference: {{ whpg_hosts_ip_preference }}"
+      - "Backup saved to /etc/hosts.whpg_backup"

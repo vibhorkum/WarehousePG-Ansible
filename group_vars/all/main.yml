@@ -10,9 +10,9 @@ whpg_rpm_version: "7.3.0-WHPG"
 
 # Cluster configuration
 whpg_cluster_name: "WarehousePG_HA_Cluster"
-whpg_coordinator_port: 6000
-whpg_segment_port_base: 6002
-whpg_standby_port: 6001
+whpg_coordinator_port: 5432
+whpg_segment_port_base: 6000
+whpg_standby_port: 5433
 
 # Network configuration
 whpg_pg_hba_allowed_cidr: "10.0.0.0/16"

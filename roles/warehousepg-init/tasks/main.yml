@@ -1,0 +1,87 @@
+---
+# Main tasks file for warehousepg-init role
+# This role initializes a WarehousePG cluster using gpinitsystem
+
+- name: Ensure this role runs on coordinator host only
+  ansible.builtin.assert:
+    that:
+      - (inventory_hostname in groups.get('whpg_coordinator', [])) or (inventory_hostname in groups.get('whpg_primary_coordinator', []))
+    fail_msg: "This role must run on the coordinator host only (whpg_coordinator or whpg_primary_coordinator group)"
+    success_msg: "Running initialization on coordinator host"
+
+- name: Check if WarehousePG is already initialized
+  become: true
+  become_user: gpadmin
+  ansible.builtin.stat:
+    path: "{{ whpg_coordinator_directory }}/gpseg-1"
+  register: coordinator_data_dir
+
+- name: Display initialization status
+  ansible.builtin.debug:
+    msg: "WarehousePG cluster is already initialized. Skipping initialization tasks."
+  when: coordinator_data_dir.stat.exists
+
+- name: Run initialization tasks
+  when: not coordinator_data_dir.stat.exists
+  block:
+    - name: Verify network connectivity to segment hosts
+      become: yes
+      ansible.builtin.command: "ping -c 3 -W 2 {{ hostvars[item].hostname | default(item) }}"
+      loop: "{{ groups['whpg_primary_segments'] | default([]) + groups['whpg_segments'] | default([]) }}"
+      register: ping_results
+      changed_when: false
+      failed_when: false
+      tags: [network-check]
+
+    - name: Display network connectivity status
+      ansible.builtin.debug:
+        msg: |
+          Network connectivity check results:
+          {% for result in ping_results.results %}
+          - {{ result.item }}: {{ 'SUCCESS' if result.rc == 0 else 'FAILED (rc=' + result.rc|string + ')' }}
+          {% endfor %}
+          
+          WARNING: If any hosts failed, gpinitsystem will fail.
+          Please ensure:
+          1. AWS Security Groups allow ICMP (ping) and all TCP/UDP traffic between coordinator and segments
+          2. Network ACLs allow traffic between subnets (10.0.2.0/24 and 10.0.9.0/24)
+          3. All hosts can resolve each other's hostnames (check /etc/hosts)
+          4. Firewalld/iptables allows traffic (should be disabled for cluster nodes)
+      tags: [network-check]
+
+    - name: Fail if network connectivity check failed
+      ansible.builtin.fail:
+        msg: |
+          Network connectivity test failed for segment hosts.
+          Cannot proceed with cluster initialization.
+          
+          Failed hosts: {{ ping_results.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list }}
+          
+          ACTION REQUIRED:
+          Please update your AWS Security Group rules to allow:
+          1. ICMP (ping) traffic between all cluster nodes
+          2. All TCP traffic between all cluster nodes (ports 1024-65535)
+          3. Ensure hosts are in the same VPC or have proper VPC peering
+          
+          Example Security Group rule:
+          - Type: All Traffic
+          - Source: Security Group of coordinator and segment hosts
+          
+          After fixing security groups, run the playbook again.
+      when: ping_results.results | selectattr('rc', 'ne', 0) | list | length > 0
+      tags: [network-check]
+
+    - name: Create configuration files
+      ansible.builtin.include_tasks: create_config_files.yml
+
+    - name: Run gpinitsystem utility
+      ansible.builtin.include_tasks: run_gpinitsystem.yml
+
+    - name: Configure WarehousePG timezone
+      ansible.builtin.include_tasks: configure_timezone.yml
+
+    - name: Setup environment variables
+      ansible.builtin.include_tasks: setup_environment.yml
+
+- name: Verify cluster is running
+  ansible.builtin.include_tasks: verify_cluster.yml

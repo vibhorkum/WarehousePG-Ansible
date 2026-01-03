@@ -6,6 +6,7 @@ This document provides examples of how to use the WarehousePG Ansible roles for 
 
 - [Quick Installation](#quick-installation)
 - [Step-by-Step Installation](#step-by-step-installation)
+- [Cluster Initialization](#cluster-initialization)
 - [Running Specific Tasks](#running-specific-tasks)
 - [DR Site Setup](#dr-site-setup)
 - [Common Operations](#common-operations)
@@ -64,6 +65,270 @@ ansible-playbook -i inventory.yml install_and_config.yml --tags standby-setup
 
 # Phase 8: Validation
 ansible-playbook -i inventory.yml install_and_config.yml --tags validate
+```
+
+## Cluster Initialization
+
+### Basic Cluster Initialization
+
+Initialize a WarehousePG cluster with default settings:
+
+```bash
+ansible-playbook -i inventory.yml init.yml
+```
+
+This will:
+1. Create gpinitsystem configuration files
+2. Run gpinitsystem to initialize the cluster
+3. Set the cluster timezone
+4. Configure environment variables for gpadmin user
+5. Verify the cluster is running
+
+### Initialization with Custom Data Directories
+
+Specify custom primary segment data directories:
+
+```bash
+ansible-playbook -i inventory.yml init.yml \
+  -e "whpg_data_directories=['/data1/primary','/data2/primary','/data3/primary']"
+```
+
+The number of directories determines the number of segment instances per host.
+
+### Initialization with Mirror Segments
+
+Initialize with mirror segments for high availability:
+
+```bash
+ansible-playbook -i inventory.yml init.yml \
+  -e "whpg_enable_mirrors=true" \
+  -e "whpg_mirror_mode=spread" \
+  -e "whpg_mirror_data_directories=['/data1/mirror','/data2/mirror']"
+```
+
+Mirror modes:
+- `spread`: Distributes mirrors across different hosts (recommended)
+- `grouped`: Groups mirrors on the same host
+
+### Initialization with DR Site Mirrors (Cross-Site HA)
+
+For geographic redundancy, place mirrors on DR site hosts:
+
+```bash
+ansible-playbook -i inventory.yml init.yml \
+  -e "whpg_enable_mirrors=true" \
+  -e "whpg_use_dr_site_mirrors=true" \
+  -e "whpg_mirror_data_directories=['/data1/mirror','/data2/mirror']"
+```
+
+This configuration:
+- Runs primary segments on `whpg_primary_segments` hosts
+- Runs mirror segments on `whpg_dr_segments` hosts
+- Provides cross-site redundancy for disaster recovery
+- Automatically uses `spread` mirror mode
+
+**Requirements:**
+- Inventory must have both `whpg_primary_segments` and `whpg_dr_segments` groups
+- DR site hosts must be accessible from primary site
+- Network latency should be considered for cross-site mirroring
+
+### Initialization with Standby Coordinator
+
+Initialize with a standby coordinator for automatic failover:
+
+```bash
+ansible-playbook -i inventory.yml init.yml \
+  -e "whpg_standby_coordinator_hostname=whpg-scdw" \
+  -e "whpg_enable_mirrors=true" \
+  -e "whpg_mirror_mode=spread"
+```
+
+### Full High-Availability Configuration
+
+Initialize a fully redundant cluster with mirrors and standby:
+
+```bash
+ansible-playbook -i inventory.yml init.yml \
+  -e "whpg_enable_mirrors=true" \
+  -e "whpg_mirror_mode=spread" \
+  -e "whpg_standby_coordinator_hostname=whpg-scdw" \
+  -e "whpg_data_directories=['/data1/primary','/data2/primary']" \
+  -e "whpg_mirror_data_directories=['/data1/mirror','/data2/mirror']"
+```
+
+### Custom Port Configuration
+
+Adjust port settings if default ports conflict:
+
+```bash
+ansible-playbook -i inventory.yml init.yml \
+  -e "whpg_port_base=6000" \
+  -e "whpg_mirror_port_base=7000" \
+  -e "whpg_coordinator_port=5432"
+```
+
+**Note**: Ensure ports are outside the range in `net.ipv4.ip_local_port_range`.
+
+### Custom Timezone Configuration
+
+Set a specific timezone for the cluster:
+
+```bash
+ansible-playbook -i inventory.yml init.yml \
+  -e "whpg_timezone=UTC"
+
+# Or use a specific timezone
+ansible-playbook -i inventory.yml init.yml \
+  -e "whpg_timezone='America/New_York'"
+```
+
+### Save Cluster Configuration Template
+
+Save cluster configuration during initialization for future reference:
+
+```bash
+ansible-playbook -i inventory.yml init.yml \
+  -e "whpg_save_config=true" \
+  -e "whpg_output_config_file=/home/gpadmin/gpconfigs/my_cluster_config"
+```
+
+### Re-initialization After Cleanup
+
+If you need to re-initialize after cleanup or failure:
+
+```bash
+# 1. Clean up previous installation
+ansible-playbook -i inventory.yml cleanup.yml \
+  -e "whpg_cleanup_remove_data=true"
+
+# 2. Recreate storage directories
+ansible-playbook -i inventory.yml install_and_config.yml --tags storage
+
+# 3. Re-initialize the cluster
+ansible-playbook -i inventory.yml init.yml
+```
+
+### Initialization Variables Reference
+
+Common initialization variables:
+
+```yaml
+# Core configuration
+whpg_coordinator_directory: "/data/coordinator"
+whpg_data_directories: 
+  - "/data1/primary"
+  - "/data2/primary"
+
+# Port configuration
+whpg_port_base: 6000
+whpg_coordinator_port: 5432
+whpg_mirror_port_base: 7000
+
+# Mirror configuration (same-site)
+whpg_enable_mirrors: false
+whpg_mirror_mode: "spread"
+whpg_mirror_data_directories:
+  - "/data1/mirror"
+  - "/data2/mirror"
+
+# DR site mirror configuration (cross-site HA)
+whpg_use_dr_site_mirrors: false  # When true, uses whpg_dr_segments for mirrors
+
+# Standby configuration
+whpg_standby_coordinator_hostname: ""
+
+# Cluster settings
+whpg_seg_prefix: "gpseg"
+whpg_checkpoint_segments: 8
+whpg_encoding: "UNICODE"
+whpg_timezone: "US/Pacific"
+
+# Environment
+whpg_default_database: "gpadmin"
+whpg_default_user: "gpadmin"
+
+# Advanced
+whpg_save_config: true
+whpg_config_dir: "/home/gpadmin/gpconfigs"
+```
+
+**DR Site Mirrors Example:**
+
+```yaml
+# inventory.yml snippet
+whpg_primary_site:
+  children:
+    whpg_primary_segments:
+      hosts:
+        segment1: ...
+        segment2: ...
+
+whpg_dr_site:
+  children:
+    whpg_dr_segments:
+      hosts:
+        dr-segment1: ...
+        dr-segment2: ...
+```
+
+```bash
+# Initialize with DR site mirrors
+ansible-playbook -i inventory.yml init.yml \
+  -e "whpg_enable_mirrors=true" \
+  -e "whpg_use_dr_site_mirrors=true"
+```
+
+# Port configuration
+whpg_port_base: 6000
+whpg_coordinator_port: 5432
+whpg_mirror_port_base: 7000
+
+# Mirror configuration
+whpg_enable_mirrors: false
+whpg_mirror_mode: "spread"
+whpg_mirror_data_directories:
+  - "/data1/mirror"
+  - "/data2/mirror"
+
+# Standby configuration
+whpg_standby_coordinator_hostname: ""
+
+# Cluster settings
+whpg_seg_prefix: "gpseg"
+whpg_checkpoint_segments: 8
+whpg_encoding: "UNICODE"
+whpg_timezone: "US/Pacific"
+
+# Environment
+whpg_default_database: "gpadmin"
+whpg_default_user: "gpadmin"
+
+# Advanced
+whpg_save_config: true
+whpg_config_dir: "/home/gpadmin/gpconfigs"
+```
+
+### Post-Initialization Verification
+
+After initialization, verify the cluster:
+
+```bash
+# SSH to coordinator
+ssh gpadmin@whpg-coordinator
+
+# Check cluster status
+source /usr/local/greenplum-db/greenplum_path.sh
+export COORDINATOR_DATA_DIRECTORY=/data/coordinator/gpseg-1
+gpstate -s
+
+# View cluster configuration
+gpstate -Q
+
+# Connect to database
+psql -d gpadmin
+
+# Inside psql, check segments
+SELECT * FROM gp_segment_configuration;
 ```
 
 ## Running Specific Tasks
@@ -400,4 +665,3 @@ After cleanup, consider:
 3. **Check disk space** - Confirm storage was freed
 4. **Review logs** - Check for any errors during cleanup
 5. **Update inventory** - Remove cleaned hosts if decommissioned
-

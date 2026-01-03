@@ -1,0 +1,37 @@
+---
+# WarehousePG Validation Role - Default Variables
+
+# Validation Control
+whpg_validate_network: true
+whpg_validate_disk: true
+whpg_validate_memory: true
+
+# Network Performance Test Options
+whpg_network_test_mode: "N"  # N=parallel pairs, n=serial pairs, M=full matrix
+whpg_network_test_dir: "/tmp"
+whpg_network_output_file: "/tmp/gpcheckperf_network.out"
+
+# Disk I/O Test Options
+whpg_disk_test_dirs:
+  - "{{ whpg_primary_storage | default('/data/primary') }}"
+  - "{{ whpg_mirror_storage | default('/data/mirror') }}"
+whpg_disk_output_file: "/tmp/gpcheckperf_disk.out"
+
+# Memory Bandwidth Test Options
+whpg_stream_output_file: "/tmp/gpcheckperf_stream.out"
+
+# Performance Thresholds (MB/s)
+whpg_min_network_bandwidth: 100  # Minimum expected network speed in MB/s
+whpg_min_disk_write: 200  # Minimum expected disk write speed in MB/s
+whpg_min_disk_read: 300  # Minimum expected disk read speed in MB/s
+whpg_min_memory_bandwidth: 5000  # Minimum expected memory bandwidth in MB/s
+
+# Test Configuration
+whpg_validate_on_coordinator: true
+whpg_hostfile_path: "/home/{{ whpg_gpadmin_user }}/hostfile_gpcheckperf"
+whpg_gpadmin_user: "gpadmin"
+whpg_install_path: "/usr/local/greenplum-db"
+
+# Validation Report
+whpg_validation_report_dir: "/home/{{ whpg_gpadmin_user }}/validation_reports"
+whpg_validation_timestamp: "{{ ansible_date_time.iso8601_basic_short }}"

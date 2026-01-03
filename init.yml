@@ -1,0 +1,66 @@
+---
+# Playbook to initialize WarehousePG cluster
+# This playbook runs gpinitsystem on the coordinator host
+
+- name: Initialize WarehousePG Cluster
+  hosts: whpg_coordinator:whpg_primary_coordinator
+  gather_facts: true
+  vars:
+    # Override these variables in your inventory or pass via command line
+    # Example: ansible-playbook init.yml -e "whpg_coordinator_directory=/data/coordinator"
+    
+    # Coordinator data directory
+    whpg_coordinator_directory: "/data/coordinator"
+    
+    # Segment data directories (determines number of segments per host)
+    # For single-disk setup, use subdirectories
+    whpg_data_directories:
+      - "/data/primary/seg1"
+      - "/data/primary/seg2"
+    
+    # Enable mirror segments (default: false)
+    whpg_enable_mirrors: false
+    
+    # Use DR site for mirrors (default: false)
+    # When true, mirrors are placed on whpg_dr_segments hosts (cross-site HA)
+    # When false, mirrors use the same hosts as primaries (spread/grouped)
+    whpg_use_dr_site_mirrors: false
+    
+    # Mirror configuration (only used if whpg_enable_mirrors is true)
+    whpg_mirror_port_base: 7000
+    whpg_mirror_data_directories:
+      - "/data/mirror/seg1"
+      - "/data/mirror/seg2"
+    whpg_mirror_mode: "spread"
+    
+    # Standby coordinator (optional - leave empty if not using standby)
+    whpg_standby_coordinator_hostname: ""
+    
+    # Timezone setting
+    whpg_timezone: "US/Pacific"
+    
+  roles:
+    - warehousepg-init
+  
+  post_tasks:
+    - name: Display initialization completion message
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          WarehousePG Initialization Complete!
+          ============================================================
+          
+          Your WarehousePG cluster is now initialized and running.
+          
+          To connect to the database:
+            psql -h {{ ansible_host }} -p {{ whpg_coordinator_port | default(5432) }} -U gpadmin
+          
+          Common next steps:
+            1. Configure pg_hba.conf for client access
+            2. Create additional users and databases
+            3. Load your data
+          
+          For more information:
+            - WarehousePG Documentation: https://warehouse-pg.io/docs/7x/
+            - Role README: roles/warehousepg-init/README.md
+          ============================================================

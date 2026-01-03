@@ -13,9 +13,28 @@ all:
               ansible_host: 3.22.42.68
               hostname: whpg-coordinator
               private_ip: 10.0.2.40
+              use_private_ip: true
+        
+        # Primary segment servers
+        # You can add as many segment servers as needed
+        # Each server will host the number of segments defined by whpg_data_directories length
         whpg_primary_segments:
           hosts:
             whpg-segment:
               ansible_host: 18.226.172.107
               private_ip: 10.0.9.61
               hostname: whpg-segment
+              use_private_ip: true
+            
+            # Example: Add more segment servers by uncommenting below
+            # whpg-segment2:
+            #   ansible_host: 18.226.172.108
+            #   private_ip: 10.0.9.62
+            #   hostname: whpg-segment2
+            #   use_private_ip: true
+            # 
+            # whpg-segment3:
+            #   ansible_host: 18.226.172.109
+            #   private_ip: 10.0.9.63
+            #   hostname: whpg-segment3
+            #   use_private_ip: true

@@ -1,0 +1,14 @@
+{% set segment_groups = ['whpg_primary_segments', 'whpg_segments'] %}
+{% for group_name in segment_groups %}
+{% if group_name in groups %}
+{% for host in groups[group_name] | default([]) %}
+{% if hostvars[host].whpg_segment_interfaces is defined %}
+{% for interface in hostvars[host].whpg_segment_interfaces %}
+{{ interface }}
+{% endfor %}
+{% else %}
+{{ hostvars[host].hostname | default(host) }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}

@@ -68,9 +68,25 @@
     - whpg_cleanup_remove_data | bool
     - whpg_additional_mirror_storage | length > 0
 
+- name: Remove mount points configuration if any
+  become: yes
+  lineinfile:
+    path: /etc/fstab
+    regexp: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ whpg_coordinator_storage }}"
+    - "{{ whpg_primary_storage }}"
+    - "{{ whpg_mirror_storage }}"
+  when:
+    - whpg_cleanup_mode | bool
+    - whpg_cleanup_remove_data | bool
+  ignore_errors: yes
+
 - name: Display storage cleanup completion
   debug:
     msg:
       - "Storage cleanup completed"
       - "Data directories removed: {{ whpg_cleanup_remove_data }}"
+      - "WARNING: Any custom mount points should be manually reviewed in /etc/fstab"
   when: whpg_cleanup_mode | bool

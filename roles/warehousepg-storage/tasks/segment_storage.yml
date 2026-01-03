@@ -34,6 +34,20 @@
   become: yes
   when: whpg_create_primary_dirs
 
+- name: Create individual segment data directories from whpg_data_directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ whpg_storage_owner }}"
+    group: "{{ whpg_storage_group }}"
+    mode: "{{ whpg_storage_mode }}"
+  become: yes
+  loop: "{{ whpg_data_directories | default([]) }}"
+  when: 
+    - whpg_create_primary_dirs
+    - whpg_data_directories is defined
+    - whpg_data_directories | length > 0
+
 - name: Create additional primary segment directories
   file:
     path: "{{ item }}"
@@ -79,6 +93,20 @@
     mode: "{{ whpg_storage_mode }}"
   become: yes
   when: whpg_create_mirror_dirs
+
+- name: Create individual mirror data directories from whpg_mirror_data_directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ whpg_storage_owner }}"
+    group: "{{ whpg_storage_group }}"
+    mode: "{{ whpg_storage_mode }}"
+  become: yes
+  loop: "{{ whpg_mirror_data_directories | default([]) }}"
+  when: 
+    - whpg_create_mirror_dirs
+    - whpg_mirror_data_directories is defined
+    - whpg_mirror_data_directories | length > 0
 
 - name: Create additional mirror segment directories
   file:

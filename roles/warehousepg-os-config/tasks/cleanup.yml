@@ -85,6 +85,9 @@
   shell: |
     echo 'always' > /sys/kernel/mm/transparent_hugepage/enabled
     echo 'always' > /sys/kernel/mm/transparent_hugepage/defrag
+  args:
+    executable: /bin/bash
+  changed_when: true
   when:
     - whpg_cleanup_mode | bool
     - whpg_cleanup_restore_defaults | bool
@@ -103,6 +106,7 @@
 - name: Update GRUB configuration
   become: yes
   command: grub2-mkconfig -o /boot/grub2/grub.cfg
+  changed_when: true
   when:
     - whpg_cleanup_mode | bool
     - whpg_cleanup_restore_defaults | bool
@@ -111,6 +115,9 @@
 - name: Restore default I/O scheduler
   become: yes
   shell: echo 'mq-deadline' > /sys/block/{{ item }}/queue/scheduler
+  args:
+    executable: /bin/bash
+  changed_when: true
   loop: "{{ ansible_devices.keys() | list }}"
   when:
     - whpg_cleanup_mode | bool
@@ -118,10 +125,58 @@
     - item not in ['loop0', 'loop1', 'sr0']
   ignore_errors: yes
 
+- name: Remove NTP/Chrony packages if installed by this role
+  become: yes
+  dnf:
+    name:
+      - chrony
+      - ntp
+    state: absent
+  when:
+    - whpg_cleanup_mode | bool
+    - whpg_cleanup_remove_packages | default(false) | bool
+  ignore_errors: yes
+
+- name: Restore original chrony configuration if backup exists
+  become: yes
+  copy:
+    src: /etc/chrony.conf.whpg_backup
+    dest: /etc/chrony.conf
+    remote_src: yes
+  when:
+    - whpg_cleanup_mode | bool
+    - whpg_cleanup_restore_defaults | bool
+  ignore_errors: yes
+
+- name: Restore original ntp configuration if backup exists
+  become: yes
+  copy:
+    src: /etc/ntp.conf.whpg_backup
+    dest: /etc/ntp.conf
+    remote_src: yes
+  when:
+    - whpg_cleanup_mode | bool
+    - whpg_cleanup_restore_defaults | bool
+  ignore_errors: yes
+
+- name: Remove configuration backups
+  become: yes
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/chrony.conf.whpg_backup
+    - /etc/ntp.conf.whpg_backup
+    - /etc/sysctl.conf.whpg_backup
+  when:
+    - whpg_cleanup_mode | bool
+    - whpg_cleanup_restore_defaults | bool
+
 - name: Display OS cleanup completion
   debug:
     msg:
       - "OS configuration cleanup completed"
       - "Settings restored to defaults: {{ whpg_cleanup_restore_defaults }}"
-      - "NOTE: A reboot may be required for some changes to take effect"
+      - "Packages removed: {{ whpg_cleanup_remove_packages | default(false) }}"
+      - "NOTE: A reboot is recommended for all changes to take effect"
   when: whpg_cleanup_mode | bool

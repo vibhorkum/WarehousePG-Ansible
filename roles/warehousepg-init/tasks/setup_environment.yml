@@ -1,0 +1,62 @@
+---
+# Setup environment variables for gpadmin user
+
+- name: Check if .bashrc already has WarehousePG configuration
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: |
+    grep -q "greenplum_path.sh" /home/gpadmin/.bashrc
+  args:
+    executable: /bin/bash
+  register: bashrc_check
+  changed_when: false
+  failed_when: false
+
+- name: Backup existing .bashrc
+  become: true
+  become_user: gpadmin
+  ansible.builtin.copy:
+    src: /home/gpadmin/.bashrc
+    dest: /home/gpadmin/.bashrc.backup.{{ ansible_date_time.epoch }}
+    remote_src: true
+    owner: gpadmin
+    group: gpadmin
+    mode: '0644'
+  when: bashrc_check.rc != 0
+
+- name: Add WarehousePG environment to .bashrc
+  become: true
+  become_user: gpadmin
+  ansible.builtin.blockinfile:
+    path: /home/gpadmin/.bashrc
+    block: "{{ lookup('template', 'gpadmin_bashrc_additions.j2') }}"
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - WarehousePG Environment"
+    create: false
+  when: bashrc_check.rc != 0
+  notify: reload gpadmin bashrc
+
+- name: Display environment setup status
+  ansible.builtin.debug:
+    msg: "WarehousePG environment variables {{ 'already configured' if bashrc_check.rc == 0 else 'added to .bashrc' }}"
+
+- name: Copy .bashrc to standby coordinator if configured
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: |
+    cd ~
+    scp .bashrc {{ whpg_standby_coordinator_hostname }}:`pwd`
+  args:
+    executable: /bin/bash
+  register: copy_bashrc
+  changed_when: copy_bashrc.rc == 0
+  when: 
+    - whpg_standby_coordinator_hostname | length > 0
+    - bashrc_check.rc != 0
+
+- name: Display standby coordinator configuration status
+  ansible.builtin.debug:
+    msg: "Environment configuration copied to standby coordinator: {{ whpg_standby_coordinator_hostname }}"
+  when: 
+    - whpg_standby_coordinator_hostname | length > 0
+    - copy_bashrc is defined
+    - copy_bashrc.rc == 0

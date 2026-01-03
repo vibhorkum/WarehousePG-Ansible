@@ -1,0 +1,89 @@
+---
+# Default variables for warehousepg-init role
+
+# GPHOME directory where WarehousePG is installed
+whpg_gphome: "/usr/local/greenplum-db"
+
+# Configuration directory for gpinitsystem files
+whpg_config_dir: "/home/gpadmin/gpconfigs"
+
+# Segment prefix for segment naming (default: gpseg)
+whpg_seg_prefix: "gpseg"
+
+# Port base for primary segments (default: 6000)
+# Make sure this is outside the range in net.ipv4.ip_local_port_range
+whpg_port_base: 6000
+
+# Coordinator hostname (required - should match the coordinator inventory host)
+# Auto-detects from whpg_coordinator or whpg_primary_coordinator group
+whpg_coordinator_hostname: "{{ hostvars[groups['whpg_coordinator'][0] if 'whpg_coordinator' in groups else groups['whpg_primary_coordinator'][0]].hostname | default(groups['whpg_coordinator'][0] if 'whpg_coordinator' in groups else groups['whpg_primary_coordinator'][0]) }}"
+
+# Coordinator data directory (required)
+whpg_coordinator_directory: "/data/coordinator"
+
+# Coordinator port (default: 5432)
+whpg_coordinator_port: 5432
+
+# Trusted shell (default: ssh)
+whpg_trusted_shell: "ssh"
+
+# Checkpoint segments (default: 8)
+whpg_checkpoint_segments: 8
+
+# Database encoding (default: UNICODE)
+whpg_encoding: "UNICODE"
+
+# Data directories for primary segments (required)
+# This determines the number of segments per host
+whpg_data_directories:
+  - "/data1/primary"
+  - "/data2/primary"
+
+# Enable mirror segments (default: false)
+whpg_enable_mirrors: false
+
+# Port base for mirror segments (only used if mirrors are enabled)
+whpg_mirror_port_base: 7000
+
+# Data directories for mirror segments (only used if mirrors are enabled)
+whpg_mirror_data_directories:
+  - "/data1/mirror"
+  - "/data2/mirror"
+
+# Mirror mode (only used if mirrors are enabled)
+# Options: spread, grouped
+whpg_mirror_mode: "spread"
+
+# Use DR site for mirrors (default: false)
+# When true, mirrors are placed on whpg_dr_segments hosts
+# When false, mirrors use the same hosts as primaries (spread/grouped)
+whpg_use_dr_site_mirrors: false
+
+# Standby coordinator hostname (optional)
+whpg_standby_coordinator_hostname: ""
+
+# Timezone setting for WarehousePG (default: US/Pacific)
+whpg_timezone: "US/Pacific"
+
+# Database name for default environment variable (default: gpadmin)
+whpg_default_database: "gpadmin"
+
+# Database user for default environment variable (default: gpadmin)
+whpg_default_user: "gpadmin"
+
+# Whether to save cluster configuration to file during initialization
+whpg_save_config: true
+
+# Output configuration file path (used with whpg_save_config)
+whpg_output_config_file: "{{ whpg_config_dir }}/config_template"
+
+# Locale setting (optional - if not set, uses system default)
+# Example: en_US.utf8
+whpg_locale: ""
+
+# Optional additional parameters for gpinitsystem_config
+# These are advanced parameters - use with caution
+whpg_additional_params: {}
+  # Example:
+  # QD_PRIMARY_ARRAY: "name~hostname~address~port~directory~contentid"
+  # MACHINE_LIST_FILE: "/path/to/machine_list"

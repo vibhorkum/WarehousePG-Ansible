@@ -1,0 +1,22 @@
+---
+galaxy_info:
+  author: Vibhor Kumar
+  description: Initialize WarehousePG cluster using gpinitsystem
+  company: ""
+  license: MIT
+  min_ansible_version: 2.9
+  platforms:
+    - name: EL
+      versions:
+        - 8
+        - 9
+  galaxy_tags:
+    - database
+    - postgresql
+    - greenplum
+    - warehousepg
+    - initialization
+
+dependencies:
+  - role: warehousepg-install
+  - role: warehousepg-storage

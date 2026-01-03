@@ -1,0 +1,117 @@
+---
+# Disk I/O and Memory Bandwidth Validation Tasks
+
+- name: Build disk test directories parameter
+  set_fact:
+    disk_dirs_param: "{{ whpg_disk_test_dirs | map('regex_replace', '^(.*)$', '-d \\1') | join(' ') }}"
+  when: inventory_hostname in groups['whpg_primary_coordinator']
+
+- name: Run gpcheckperf disk and stream tests
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  shell: |
+    source {{ whpg_install_path }}/greenplum_path.sh
+    gpcheckperf -f {{ whpg_hostfile_path }} -r ds -D {{ disk_dirs_param }} > {{ whpg_disk_output_file }} 2>&1
+    echo "Exit code: $?"
+  args:
+    executable: /bin/bash
+  register: disk_test_result
+  changed_when: false
+  when: inventory_hostname in groups['whpg_primary_coordinator']
+  ignore_errors: yes
+  async: 1800  # 30 minutes timeout for large tests
+  poll: 30
+
+- name: Read disk and memory test output
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  slurp:
+    src: "{{ whpg_disk_output_file }}"
+  register: disk_output
+  when: inventory_hostname in groups['whpg_primary_coordinator']
+
+- name: Parse disk and memory test results
+  set_fact:
+    disk_test_output: "{{ disk_output.content | b64decode }}"
+  when: inventory_hostname in groups['whpg_primary_coordinator']
+
+- name: Display disk and memory test results
+  debug:
+    msg: "{{ disk_test_output.split('\n') }}"
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - disk_test_output is defined
+
+- name: Extract disk write performance
+  set_fact:
+    disk_write_speed: "{{ disk_test_output | regex_search('disk write avg = ([0-9.]+)', '\\1') | first | default('0') }}"
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - disk_test_output is defined
+    - whpg_validate_disk | bool
+
+- name: Extract disk read performance
+  set_fact:
+    disk_read_speed: "{{ disk_test_output | regex_search('disk read avg = ([0-9.]+)', '\\1') | first | default('0') }}"
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - disk_test_output is defined
+    - whpg_validate_disk | bool
+
+- name: Extract memory bandwidth
+  set_fact:
+    memory_bandwidth: "{{ disk_test_output | regex_search('stream avg = ([0-9.]+)', '\\1') | first | default('0') }}"
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - disk_test_output is defined
+    - whpg_validate_memory | bool
+
+- name: Validate disk write performance
+  assert:
+    that:
+      - disk_write_speed | float >= whpg_min_disk_write
+    fail_msg: "Disk write speed ({{ disk_write_speed }} MB/s) is below minimum threshold ({{ whpg_min_disk_write }} MB/s)"
+    success_msg: "Disk write speed ({{ disk_write_speed }} MB/s) meets minimum requirements"
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - disk_write_speed is defined
+    - disk_write_speed != '0'
+    - whpg_validate_disk | bool
+  ignore_errors: yes
+
+- name: Validate disk read performance
+  assert:
+    that:
+      - disk_read_speed | float >= whpg_min_disk_read
+    fail_msg: "Disk read speed ({{ disk_read_speed }} MB/s) is below minimum threshold ({{ whpg_min_disk_read }} MB/s)"
+    success_msg: "Disk read speed ({{ disk_read_speed }} MB/s) meets minimum requirements"
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - disk_read_speed is defined
+    - disk_read_speed != '0'
+    - whpg_validate_disk | bool
+  ignore_errors: yes
+
+- name: Validate memory bandwidth
+  assert:
+    that:
+      - memory_bandwidth | float >= whpg_min_memory_bandwidth
+    fail_msg: "Memory bandwidth ({{ memory_bandwidth }} MB/s) is below minimum threshold ({{ whpg_min_memory_bandwidth }} MB/s)"
+    success_msg: "Memory bandwidth ({{ memory_bandwidth }} MB/s) meets minimum requirements"
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - memory_bandwidth is defined
+    - memory_bandwidth != '0'
+    - whpg_validate_memory | bool
+  ignore_errors: yes
+
+- name: Save disk and memory test results to validation report
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  copy:
+    content: "{{ disk_test_output }}"
+    dest: "{{ whpg_validation_report_dir }}/disk_memory_validation_{{ whpg_validation_timestamp }}.txt"
+    mode: '0644'
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - disk_test_output is defined

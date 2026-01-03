@@ -9,63 +9,123 @@ WarehousePG-Ansible/
 ├── ansible.cfg                 # Ansible configuration
 ├── inventory.yml               # Inventory file with host definitions
 ├── site.yml                    # Main playbook
-├── inventory_plugins/          # Custom inventory plugins
-│   └── warehousepg.py         # Plugin to extract upstream_node information
+├── quick_install.yml           # Quick installation playbook
+├── install_and_config.yml      # Step-by-step installation
+├── init.yml                    # Cluster initialization playbook
+├── cleanup.yml                 # Cleanup/uninstall playbook
+├── validate.yml                # Cluster validation playbook
+├── PLAYBOOK_EXAMPLES.md        # Playbook usage examples
 └── roles/
-    └── warehousepg/           # WarehousePG role
+    ├── warehousepg-install/    # Installation and prerequisites
+    │   ├── README.md
+    │   ├── defaults/main.yml
+    │   ├── tasks/
+    │   │   ├── main.yml
+    │   │   ├── user_management.yml
+    │   │   ├── configure_hosts.yml
+    │   │   ├── passwordless_ssh.yml
+    │   │   └── cleanup.yml
+    │   └── templates/
+    ├── warehousepg-os-config/  # OS configuration and tuning
+    │   ├── README.md
+    │   ├── defaults/main.yml
+    │   ├── tasks/
+    │   │   ├── main.yml
+    │   │   ├── sysctl.yml
+    │   │   ├── limits.yml
+    │   │   ├── selinux.yml
+    │   │   ├── firewall.yml
+    │   │   └── cleanup.yml
+    │   └── templates/
+    ├── warehousepg-storage/    # Storage directory setup
+    │   ├── README.md
+    │   ├── defaults/main.yml
+    │   ├── tasks/
+    │   │   ├── main.yml
+    │   │   ├── coordinator_storage.yml
+    │   │   ├── segment_storage.yml
+    │   │   └── cleanup.yml
+    ├── warehousepg-init/       # Cluster initialization
+    │   ├── README.md
+    │   ├── defaults/main.yml
+    │   ├── tasks/
+    │   │   ├── main.yml
+    │   │   ├── create_config_files.yml
+    │   │   ├── run_gpinitsystem.yml
+    │   │   ├── configure_timezone.yml
+    │   │   ├── setup_environment.yml
+    │   │   └── verify_cluster.yml
+    │   └── templates/
+    │       ├── gpinitsystem_config.j2
+    │       ├── hostfile_gpinitsystem.j2
+    │       └── gpadmin_bashrc_additions.j2
+    └── warehousepg-validate/   # Performance validation
         ├── README.md
-        ├── meta/
-        │   └── main.yml       # Role metadata
-        ├── defaults/
-        │   └── main.yml       # Default variables
-        ├── handlers/
-        │   └── main.yml       # Handlers for service restarts
+        ├── defaults/main.yml
         ├── tasks/
-        │   ├── main.yml                    # Main task orchestration
-        │   ├── user_management.yml         # User and SSH setup
-        │   ├── dependencies.yml            # System dependencies
-        │   ├── install_warehousepg.yml     # WarehousePG installation
-        │   ├── configure_environment.yml   # Environment configuration
-        │   ├── initialize_cluster.yml      # Cluster initialization
-        │   ├── setup_standby.yml           # Standby coordinator setup
-        │   └── configure_access.yml        # Remote access configuration
+        │   ├── main.yml
+        │   ├── prerequisites.yml
+        │   ├── network_validation.yml
+        │   ├── disk_memory_validation.yml
+        │   └── generate_report.yml
         └── templates/
-            ├── gpinitsystem_config.j2      # Cluster init configuration
-            ├── hostfile_segments.j2        # Segment host list
-            └── pg_hba_additions.j2         # Access control rules
+            └── hostfile_gpcheckperf.j2
 ```
 
 ## Features
 
+**Modular Role Architecture**
+- Separate roles for installation, OS config, storage, initialization, and validation
+- Independent execution or combined workflows
+- Idempotent tasks for safe re-runs
+
 **User Management**
 - Creates gpadmin user (UID/GID: 530)
-- Sets up passwordless SSH
+- Sets up passwordless SSH between all hosts
 - Configures sudo access
 
-**System Configuration**
-- Installs all required dependencies
-- Configures EDB repository
-- Sets file descriptor limits
+**OS Configuration & Tuning**
+- Kernel parameter optimization (sysctl)
+- Resource limits configuration
+- SELinux and firewall management
+- Transparent Huge Pages (THP) disabled
+- Network tuning for WarehousePG
+- NTP/Chrony time synchronization
 
 **WarehousePG Installation**
 - RPM-based installation (version 7.3.0)
+- EDB repository configuration
 - Installs server, clients, and backup tools
 - Configures environment variables
 
-**Cluster Management**
-- Initializes coordinator and segments
-- Configures standby coordinator
-- Sets up replication
+**Storage Management**
+- Coordinator and segment data directory setup
+- XFS filesystem configuration
+- Proper permissions and ownership
 
-**Security**
-- Configures pg_hba.conf for remote access
-- Sets up network access controls
-- Manages authentication
+**Cluster Initialization**
+- Automated gpinitsystem execution
+- Support for mirror segments (high availability)
+- Standby coordinator configuration
+- Timezone and environment setup
+- Cluster verification
 
-**Custom Inventory Plugin**
-- Extracts upstream_node information
-- Resolves hostname to IP mappings
-- Supports replication topology
+**Performance Validation**
+- Network bandwidth testing (gpcheckperf)
+- Disk I/O performance validation
+- Memory bandwidth testing (STREAM)
+- Configurable performance thresholds
+
+**Cleanup & Maintenance**
+- Complete uninstallation capability
+- Selective cleanup (packages, user, data)
+- OS settings restoration
+- Safe cleanup with confirmations
+
+**Network Configuration**
+- /etc/hosts management
+- Per-host IP preference (public vs private)
+- Custom hostname configuration
 
 ## Prerequisites
 
@@ -223,9 +283,45 @@ Use tags to run specific parts of the deployment:
 - `dependencies`: System dependencies only
 - `install`: WarehousePG installation only
 - `configure`: Environment configuration only
+- `init`: Cluster initialization only
 - `cluster`: Cluster initialization only
 - `standby`: Standby setup only
 - `access`: Access configuration only
+
+## Cluster Initialization
+
+After installation and configuration, initialize the WarehousePG cluster:
+
+### Basic Initialization
+```bash
+ansible-playbook -i inventory.yml init.yml
+```
+
+### Initialization with Mirrors (High Availability)
+```bash
+ansible-playbook -i inventory.yml init.yml \
+  -e "whpg_enable_mirrors=true" \
+  -e "whpg_mirror_mode=spread"
+```
+
+### Initialization with Standby Coordinator
+```bash
+ansible-playbook -i inventory.yml init.yml \
+  -e "whpg_standby_coordinator_hostname=whpg-scdw"
+```
+
+### Full HA Configuration
+```bash
+ansible-playbook -i inventory.yml init.yml \
+  -e "whpg_enable_mirrors=true" \
+  -e "whpg_mirror_mode=spread" \
+  -e "whpg_standby_coordinator_hostname=whpg-scdw"
+```
+
+For more initialization examples, see:
+- [init.yml playbook](init.yml)
+- [warehousepg-init role README](roles/warehousepg-init/README.md)
+- [PLAYBOOK_EXAMPLES.md - Cluster Initialization](PLAYBOOK_EXAMPLES.md#cluster-initialization)
 
 ## Troubleshooting
 

@@ -12,11 +12,29 @@ all:
             whpg-coordinator:
               ansible_host: 3.22.42.68
               hostname: whpg-coordinator
+        
+        # Primary segment servers
+        # Add as many segment servers as needed for your cluster
+        # Total segments = (number of servers) × (length of whpg_data_directories)
+        # Example: 3 servers with 2 data directories = 6 segment instances
         whpg_primary_segments:
           hosts:
             whpg-segment:
               ansible_host: 18.226.172.107
               hostname: whpg-segment
+            
+            # Add more segment servers as needed:
+            # whpg-segment2:
+            #   ansible_host: 18.226.172.108
+            #   hostname: whpg-segment2
+            # 
+            # whpg-segment3:
+            #   ansible_host: 18.226.172.109
+            #   hostname: whpg-segment3
+            # 
+            # whpg-segment4:
+            #   ansible_host: 18.226.172.110
+            #   hostname: whpg-segment4
 
     whpg_dr_site:
       children:
@@ -28,6 +46,8 @@ all:
               upstream_cluster: whpg_primary_site
               replication_slot: dr-coordinator
               restore_command: "rsync -a /mnt/wal_archive/whpg-coordinator/%f \"%p\""
+        # DR segment servers (for mirrors when using whpg_use_dr_site_mirrors)
+        # Should match the number and configuration of primary segments
         whpg_dr_segments:
           hosts:
             dr-segment:
@@ -36,3 +56,18 @@ all:
               upstream_segment: whpg-segment
               replication_slot: dr-segment
               restore_command: "rsync -a /mnt/wal_archive/whpg-segment/%f \"%p\""
+            
+            # Add DR segment servers to match primary segment count:
+            # dr-segment2:
+            #   ansible_host: 210.0.0.2
+            #   hostname: dr-segment2
+            #   upstream_segment: whpg-segment2
+            #   replication_slot: dr-segment2
+            #   restore_command: "rsync -a /mnt/wal_archive/whpg-segment2/%f \"%p\""
+            # 
+            # dr-segment3:
+            #   ansible_host: 210.0.0.3
+            #   hostname: dr-segment3
+            #   upstream_segment: whpg-segment3
+            #   replication_slot: dr-segment3
+            #   restore_command: "rsync -a /mnt/wal_archive/whpg-segment3/%f \"%p\""

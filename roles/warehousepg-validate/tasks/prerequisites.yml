@@ -1,0 +1,74 @@
+---
+# Validation Prerequisites Tasks
+
+- name: Create validation reports directory
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  file:
+    path: "{{ whpg_validation_report_dir }}"
+    state: directory
+    mode: '0755'
+  when: inventory_hostname in groups['whpg_primary_coordinator']
+
+- name: Source WarehousePG environment
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  shell: source {{ whpg_install_path }}/greenplum_path.sh && which gpcheckperf
+  args:
+    executable: /bin/bash
+  register: gpcheckperf_path
+  changed_when: false
+  when: inventory_hostname in groups['whpg_primary_coordinator']
+
+- name: Display gpcheckperf location
+  debug:
+    msg: "gpcheckperf found at: {{ gpcheckperf_path.stdout }}"
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - gpcheckperf_path.stdout is defined
+
+- name: Create host file for gpcheckperf
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  template:
+    src: hostfile_gpcheckperf.j2
+    dest: "{{ whpg_hostfile_path }}"
+    mode: '0644'
+  when: inventory_hostname in groups['whpg_primary_coordinator']
+
+- name: Display host file contents
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  command: cat {{ whpg_hostfile_path }}
+  register: hostfile_contents
+  changed_when: false
+  when: inventory_hostname in groups['whpg_primary_coordinator']
+
+- name: Show hosts to be validated
+  debug:
+    msg: "{{ hostfile_contents.stdout_lines }}"
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - hostfile_contents.stdout_lines is defined
+
+- name: Verify passwordless SSH is configured
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  shell: |
+    source {{ whpg_install_path }}/greenplum_path.sh
+    while read host; do
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$host" 'echo OK' || echo "FAILED: $host"
+    done < {{ whpg_hostfile_path }}
+  args:
+    executable: /bin/bash
+  register: ssh_test
+  changed_when: false
+  failed_when: "'FAILED' in ssh_test.stdout"
+  when: inventory_hostname in groups['whpg_primary_coordinator']
+
+- name: Display SSH connectivity results
+  debug:
+    msg: "{{ ssh_test.stdout_lines }}"
+  when: 
+    - inventory_hostname in groups['whpg_primary_coordinator']
+    - ssh_test.stdout_lines is defined

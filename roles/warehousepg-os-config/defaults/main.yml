@@ -2,6 +2,7 @@
 # Cleanup Mode - Set to true to restore OS settings
 whpg_cleanup_mode: false
 whpg_cleanup_restore_defaults: true  # Restore OS settings to defaults during cleanup
+whpg_cleanup_remove_packages: false  # Remove NTP/Chrony packages installed by this role
 
 # SELinux Configuration
 whpg_selinux_state: disabled  # disabled, enforcing, permissive

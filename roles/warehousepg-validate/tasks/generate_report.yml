@@ -1,0 +1,83 @@
+---
+# Generate Validation Summary Report
+
+- name: Create validation summary report
+  become: yes
+  become_user: "{{ whpg_gpadmin_user }}"
+  copy:
+    content: |
+      WarehousePG Cluster Validation Report
+      =====================================
+      Generated: {{ ansible_date_time.iso8601 }}
+      Coordinator: {{ inventory_hostname }}
+      
+      Network Performance
+      -------------------
+      Test Mode: {{ whpg_network_test_mode }}
+      {% if network_bandwidth is defined and network_bandwidth != '0' %}
+      Bandwidth: {{ network_bandwidth }} MB/s
+      Threshold: {{ whpg_min_network_bandwidth }} MB/s
+      Status: {{ 'PASS' if (network_bandwidth | float >= whpg_min_network_bandwidth) else 'FAIL' }}
+      {% else %}
+      Status: NOT TESTED or FAILED
+      {% endif %}
+      
+      Disk I/O Performance
+      --------------------
+      {% if disk_write_speed is defined and disk_write_speed != '0' %}
+      Write Speed: {{ disk_write_speed }} MB/s
+      Write Threshold: {{ whpg_min_disk_write }} MB/s
+      Write Status: {{ 'PASS' if (disk_write_speed | float >= whpg_min_disk_write) else 'FAIL' }}
+      {% endif %}
+      {% if disk_read_speed is defined and disk_read_speed != '0' %}
+      Read Speed: {{ disk_read_speed }} MB/s
+      Read Threshold: {{ whpg_min_disk_read }} MB/s
+      Read Status: {{ 'PASS' if (disk_read_speed | float >= whpg_min_disk_read) else 'FAIL' }}
+      {% endif %}
+      {% if disk_write_speed is not defined or disk_write_speed == '0' %}
+      Status: NOT TESTED or FAILED
+      {% endif %}
+      
+      Memory Bandwidth
+      ----------------
+      {% if memory_bandwidth is defined and memory_bandwidth != '0' %}
+      Bandwidth: {{ memory_bandwidth }} MB/s
+      Threshold: {{ whpg_min_memory_bandwidth }} MB/s
+      Status: {{ 'PASS' if (memory_bandwidth | float >= whpg_min_memory_bandwidth) else 'FAIL' }}
+      {% else %}
+      Status: NOT TESTED or FAILED
+      {% endif %}
+      
+      Test Directories
+      ----------------
+      {% for dir in whpg_disk_test_dirs %}
+      - {{ dir }}
+      {% endfor %}
+      
+      Hosts Tested
+      ------------
+      {% for host in groups['whpg_primary_segments'] | default([]) %}
+      - {{ host }}
+      {% endfor %}
+      
+      Detailed Reports
+      ----------------
+      Network: {{ whpg_validation_report_dir }}/network_validation_{{ whpg_validation_timestamp }}.txt
+      Disk/Memory: {{ whpg_validation_report_dir }}/disk_memory_validation_{{ whpg_validation_timestamp }}.txt
+    dest: "{{ whpg_validation_report_dir }}/validation_summary_{{ whpg_validation_timestamp }}.txt"
+    mode: '0644'
+  when: inventory_hostname in groups['whpg_primary_coordinator']
+
+- name: Display validation summary report location
+  debug:
+    msg:
+      - "========================================="
+      - "VALIDATION COMPLETED"
+      - "========================================="
+      - ""
+      - "Summary report: {{ whpg_validation_report_dir }}/validation_summary_{{ whpg_validation_timestamp }}.txt"
+      - "Network report: {{ whpg_validation_report_dir }}/network_validation_{{ whpg_validation_timestamp }}.txt"
+      - "Disk/Memory report: {{ whpg_validation_report_dir }}/disk_memory_validation_{{ whpg_validation_timestamp }}.txt"
+      - ""
+      - "Review the reports for detailed performance metrics."
+  when: inventory_hostname in groups['whpg_primary_coordinator']

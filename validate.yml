@@ -1,0 +1,61 @@
+---
+# WarehousePG Cluster Validation Playbook
+# Validates network, disk, and memory performance using gpcheckperf
+#
+# Usage:
+#   # Full validation (all tests)
+#   ansible-playbook -i inventory.yml validate.yml
+#
+#   # Network validation only
+#   ansible-playbook -i inventory.yml validate.yml --tags validate-network
+#
+#   # Disk and memory validation only
+#   ansible-playbook -i inventory.yml validate.yml --tags validate-disk,validate-memory
+#
+#   # Custom thresholds
+#   ansible-playbook -i inventory.yml validate.yml \
+#     -e "whpg_min_network_bandwidth=1000" \
+#     -e "whpg_min_disk_write=500"
+
+- name: WarehousePG Cluster Performance Validation
+  hosts: whpg_primary_coordinator
+  become: yes
+  
+  pre_tasks:
+    - name: Display validation start message
+      debug:
+        msg:
+          - "========================================="
+          - "WarehousePG Cluster Validation"
+          - "========================================="
+          - ""
+          - "Coordinator: {{ inventory_hostname }}"
+          - "Validation Tests:"
+          - "  - Network Performance: {{ whpg_validate_network | default(true) }}"
+          - "  - Disk I/O Performance: {{ whpg_validate_disk | default(true) }}"
+          - "  - Memory Bandwidth: {{ whpg_validate_memory | default(true) }}"
+          - ""
+          - "Performance Thresholds:"
+          - "  - Network: {{ whpg_min_network_bandwidth | default(100) }} MB/s"
+          - "  - Disk Write: {{ whpg_min_disk_write | default(200) }} MB/s"
+          - "  - Disk Read: {{ whpg_min_disk_read | default(300) }} MB/s"
+          - "  - Memory: {{ whpg_min_memory_bandwidth | default(5000) }} MB/s"
+      tags: [always]
+
+  roles:
+    - role: warehousepg-validate
+      tags: [validate]
+
+  post_tasks:
+    - name: Display validation completion message
+      debug:
+        msg:
+          - "========================================="
+          - "VALIDATION COMPLETED"
+          - "========================================="
+          - ""
+          - "Check validation reports in:"
+          - "  {{ whpg_validation_report_dir | default('/home/gpadmin/validation_reports') }}"
+          - ""
+          - "Review the summary report for overall results."
+      tags: [always]

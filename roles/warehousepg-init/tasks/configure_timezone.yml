@@ -1,0 +1,68 @@
+---
+# Configure WarehousePG timezone
+
+- name: Check current timezone setting
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: |
+    source {{ whpg_gphome }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_directory }}/gpseg-1
+    gpconfig -s TimeZone
+  args:
+    executable: /bin/bash
+  register: current_timezone
+  changed_when: false
+  failed_when: false
+
+- name: Display current timezone
+  ansible.builtin.debug:
+    msg: "Current timezone: {{ current_timezone.stdout_lines | select('search', 'Value:') | list }}"
+  when: current_timezone.rc == 0
+
+- name: Set WarehousePG timezone
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: |
+    source {{ whpg_gphome }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_directory }}/gpseg-1
+    gpconfig -c TimeZone -v '{{ whpg_timezone }}'
+  args:
+    executable: /bin/bash
+  register: set_timezone
+  changed_when: "'completed successfully' in set_timezone.stdout"
+
+- name: Display timezone configuration result
+  ansible.builtin.debug:
+    var: set_timezone.stdout_lines
+
+- name: Restart WarehousePG to apply timezone changes
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: |
+    source {{ whpg_gphome }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_directory }}/gpseg-1
+    gpstop -ra
+  args:
+    executable: /bin/bash
+  register: restart_cluster
+  changed_when: "'Database successfully shutdown' in restart_cluster.stdout"
+
+- name: Display restart result
+  ansible.builtin.debug:
+    msg: "WarehousePG cluster restarted to apply timezone setting"
+
+- name: Verify timezone setting after restart
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: |
+    source {{ whpg_gphome }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_directory }}/gpseg-1
+    gpconfig -s TimeZone
+  args:
+    executable: /bin/bash
+  register: verify_timezone
+  changed_when: false
+
+- name: Display verified timezone
+  ansible.builtin.debug:
+    msg: "Verified timezone: {{ verify_timezone.stdout_lines | select('search', 'Value:') | list }}"

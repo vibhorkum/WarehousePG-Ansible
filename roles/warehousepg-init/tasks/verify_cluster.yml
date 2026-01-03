@@ -1,0 +1,63 @@
+---
+# Verify WarehousePG cluster is running
+
+- name: Check cluster status with gpstate
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: |
+    source {{ whpg_gphome }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_directory }}/gpseg-1
+    gpstate -s
+  args:
+    executable: /bin/bash
+  register: cluster_status
+  changed_when: false
+  failed_when: false
+
+- name: Display cluster status
+  ansible.builtin.debug:
+    var: cluster_status.stdout_lines
+
+- name: Verify cluster is running
+  ansible.builtin.assert:
+    that:
+      - cluster_status.rc == 0
+      - "'Coordinator Configuration' in cluster_status.stdout or 'Coordinator instance' in cluster_status.stdout or 'Coordinator host' in cluster_status.stdout"
+    fail_msg: "WarehousePG cluster is not running properly"
+    success_msg: "WarehousePG cluster is running"
+
+- name: Get cluster configuration summary
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: |
+    source {{ whpg_gphome }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_directory }}/gpseg-1
+    gpstate -Q
+  args:
+    executable: /bin/bash
+  register: cluster_summary
+  changed_when: false
+
+- name: Display cluster configuration summary
+  ansible.builtin.debug:
+    msg: |
+      ============================================================
+      WarehousePG Cluster Initialization Complete
+      ============================================================
+      {{ cluster_summary.stdout }}
+      ============================================================
+      
+      Next Steps:
+      1. Connect to the database: psql -h {{ whpg_coordinator_hostname }} -p {{ whpg_coordinator_port }} -U gpadmin
+      2. Create additional users and databases
+      3. Configure client connections in pg_hba.conf
+      4. Load data and create schemas
+      
+      Configuration files:
+        - Config: {{ whpg_config_dir }}/gpinitsystem_config
+        - Hostfile: {{ whpg_config_dir }}/hostfile_gpinitsystem
+      {% if whpg_save_config %}  - Template: {{ whpg_output_config_file }}{% endif %}
+      
+      Logs:
+        - /home/gpadmin/gpAdminLogs/
+      ============================================================
