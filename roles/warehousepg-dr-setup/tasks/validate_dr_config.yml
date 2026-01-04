@@ -1,0 +1,46 @@
+---
+# Validate DR Configuration
+
+- name: Check if primary site is defined
+  assert:
+    that:
+      - groups['whpg_primary_coordinator'] is defined
+      - groups['whpg_primary_coordinator'] | length > 0
+    fail_msg: "Primary coordinator group is not defined or empty"
+    success_msg: "Primary coordinator group validated"
+
+- name: Check if DR site is defined
+  assert:
+    that:
+      - groups['whpg_dr_site'] is defined
+      - groups['whpg_dr_site'] | length > 0
+    fail_msg: "DR site group is not defined or empty"
+    success_msg: "DR site group validated"
+
+- name: Verify primary and DR segment counts match
+  assert:
+    that:
+      - groups['whpg_primary_segments'] | length == groups['whpg_dr_segments'] | length
+    fail_msg: "Primary segments ({{ groups['whpg_primary_segments'] | length }}) must match DR segments ({{ groups['whpg_dr_segments'] | length }})"
+    success_msg: "Segment counts match: {{ groups['whpg_primary_segments'] | length }} segments per site"
+  when:
+    - whpg_dr_enable_segment_mirrors | bool
+    - groups['whpg_dr_segments'] is defined
+
+- name: Check cluster is running on primary coordinator
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}
+    gpstate -s
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: cluster_status
+  changed_when: false
+  failed_when: 
+    - cluster_status.rc != 0
+    - cluster_status.rc != 1  # Exit code 1 means warnings (e.g., mirrors down), which is acceptable
+
+- name: Display cluster status
+  debug:
+    msg: "Primary cluster is running and ready for DR setup"

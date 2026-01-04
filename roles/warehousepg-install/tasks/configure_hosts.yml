@@ -16,49 +16,59 @@
     force: no
   ignore_errors: yes
 
-- name: Add primary coordinator hosts to /etc/hosts
+- name: Add primary coordinator hosts to /etc/hosts (hostname and replication alias)
   become: yes
   lineinfile:
     path: /etc/hosts
-    line: "{{ ((hostvars[item].use_private_ip | default(whpg_hosts_ip_preference == 'private_ip')) and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {{ item }}"
-    regexp: "^.*\\s+{{ hostvars[item].hostname | default(item) }}(\\s|$)"
+    line: "{{ ((hostvars[item].use_private_ip | default(whpg_hosts_ip_preference == 'private_ip')) and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {% if hostvars[item].replication_alias is defined %}{{ hostvars[item].replication_alias }}{% endif %}"
+    regexp: "^.*\\s+({{ hostvars[item].hostname | default(item) }}|{{ hostvars[item].replication_alias | default(hostvars[item].hostname | default(item)) }})(\\s|$)"
     state: present
   loop: "{{ groups['whpg_primary_coordinator'] | default([]) }}"
-  when: groups['whpg_primary_coordinator'] is defined
+  when:
+    - groups['whpg_primary_coordinator'] is defined
+    - item != inventory_hostname
 
-- name: Add primary segment hosts to /etc/hosts
+- name: Add primary segment hosts to /etc/hosts (hostname and replication alias)
   become: yes
   lineinfile:
     path: /etc/hosts
-    line: "{{ ((hostvars[item].use_private_ip | default(whpg_hosts_ip_preference == 'private_ip')) and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {{ item }}"
-    regexp: "^.*\\s+{{ hostvars[item].hostname | default(item) }}(\\s|$)"
+    line: "{{ ((hostvars[item].use_private_ip | default(whpg_hosts_ip_preference == 'private_ip')) and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {% if hostvars[item].replication_alias is defined %}{{ hostvars[item].replication_alias }}{% endif %}"
+    regexp: "^.*\\s+{{ hostvars[item].hostname | default(item) }}(\\s+|$)"
     state: present
   loop: "{{ groups['whpg_primary_segments'] | default([]) }}"
-  when: groups['whpg_primary_segments'] is defined
+  when:
+    - groups['whpg_primary_segments'] is defined
+    - item != inventory_hostname
 
-- name: Add DR coordinator hosts to /etc/hosts
+- name: Add DR coordinator hosts to /etc/hosts (hostname and replication alias)
   become: yes
   lineinfile:
     path: /etc/hosts
-    line: "{{ ((hostvars[item].use_private_ip | default(whpg_hosts_ip_preference == 'private_ip')) and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {{ item }}"
-    regexp: "^.*\\s+{{ hostvars[item].hostname | default(item) }}(\\s|$)"
+    line: "{{ ((hostvars[item].use_private_ip | default(whpg_hosts_ip_preference == 'private_ip')) and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {% if hostvars[item].replication_alias is defined %}{{ hostvars[item].replication_alias }}{% endif %}"
+    regexp: "^.*\\s+({{ hostvars[item].hostname | default(item) }}|{{ hostvars[item].replication_alias | default(hostvars[item].hostname | default(item)) }})(\\s|$)"
     state: present
   loop: "{{ groups['whpg_dr_coordinator'] | default([]) }}"
-  when: groups['whpg_dr_coordinator'] is defined
+  when:
+    - groups['whpg_dr_coordinator'] is defined
+    - item != inventory_hostname
 
-- name: Add DR segment hosts to /etc/hosts
+- name: Add DR segment hosts to /etc/hosts (hostname and replication alias)
   become: yes
   lineinfile:
     path: /etc/hosts
-    line: "{{ ((hostvars[item].use_private_ip | default(whpg_hosts_ip_preference == 'private_ip')) and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {{ item }}"
-    regexp: "^.*\\s+{{ hostvars[item].hostname | default(item) }}(\\s|$)"
+    line: "{{ ((hostvars[item].use_private_ip | default(whpg_hosts_ip_preference == 'private_ip')) and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }} {% if hostvars[item].replication_alias is defined %}{{ hostvars[item].replication_alias }}{% endif %}"
+    regexp: "^.*\\s+({{ hostvars[item].hostname | default(item) }}|{{ hostvars[item].replication_alias | default(hostvars[item].hostname | default(item)) }})(\\s|$)"
     state: present
   loop: "{{ groups['whpg_dr_segments'] | default([]) }}"
-  when: groups['whpg_dr_segments'] is defined
+  when:
+    - groups['whpg_dr_segments'] is defined
+    - item != inventory_hostname
 
 - name: Display /etc/hosts configuration summary
   debug:
     msg:
       - "Updated /etc/hosts with IP addresses based on use_private_ip flag (per-host) or global preference"
+      - "All hosts: Added both hostname and replication alias with correct site-specific IPs"
+      - "Cross-site resolution: Hostnames resolve to remote site IPs for gpaddmirrors connectivity"
       - "Global preference: {{ whpg_hosts_ip_preference }}"
       - "Backup saved to /etc/hosts.whpg_backup"

@@ -5,6 +5,10 @@ all:
     ansible_ssh_private_key_file: /Users/vibhor.kumar/.ssh/Vibhor-Pioneer-AWS-Key.pem  # Full path to your private key
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
   children:
+    # PRIMARY SITE - Currently Site 1 (US East 2, Subnets 10.0.2.0/24, 10.0.9.0/24)
+    # Each site uses IDENTICAL hostnames (whpg-coordinator, whpg-segment)
+    # Site-local /etc/hosts maps to site-specific IPs
+    # Replication uses IP addresses or replication aliases (site1-coord-repl)
     whpg_primary_site:
       children:
         whpg_primary_coordinator:
@@ -14,6 +18,8 @@ all:
               hostname: whpg-coordinator
               private_ip: 10.0.2.40
               use_private_ip: true
+              site_name: site1
+              replication_alias: site1-coordinator-repl
         
         # Primary segment servers
         # You can add as many segment servers as needed
@@ -25,16 +31,41 @@ all:
               private_ip: 10.0.9.61
               hostname: whpg-segment
               use_private_ip: true
+              site_name: site1
+              replication_alias: site1-segment-repl
             
             # Example: Add more segment servers by uncommenting below
-            # whpg-segment2:
+            # site1-segment2:
             #   ansible_host: 18.226.172.108
             #   private_ip: 10.0.9.62
-            #   hostname: whpg-segment2
-            #   use_private_ip: true
-            # 
-            # whpg-segment3:
-            #   ansible_host: 18.226.172.109
-            #   private_ip: 10.0.9.63
-            #   hostname: whpg-segment3
-            #   use_private_ip: true
+            #   hostname: site1-segment2, Subnets 10.0.10.0/24, 10.0.12.0/24)
+    # Uses SAME hostnames as Site 1 (whpg-coordinator, whpg-segment)
+    # Site-local /etc/hosts maps to Site 2 IPs (10.0.10.232, 10.0.12.215)
+    # After failover promotion, no hostname changes needed in catalog
+    # NOTE: Inventory names must be unique (dr-coordinator, dr-segment)
+    #       but hostname variable is set to same as primary (whpg-coordinator, whpg-segment)
+    whpg_dr_site:
+      children:
+        whpg_dr_coordinator:
+          hosts:
+            dr-coordinator:
+              ansible_host: 3.137.161.206
+              hostname: whpg-coordinator
+              private_ip: 10.0.10.232
+              use_private_ip: true
+              site_name: site2
+              replication_alias: site2-coordinator-repl
+              replication_server: site1-coordinator-repl  # Primary site coordinator for standby setup
+        
+        # DR segment servers (for mirrors when using whpg_use_dr_site_mirrors)
+        # Should match the number and configuration of primary segments
+        whpg_dr_segments:
+          hosts:
+            dr-segment:
+              ansible_host: 3.139.108.84
+              hostname: whpg-segment
+              private_ip: 10.0.12.215
+              use_private_ip: true
+              site_name: site2
+              replication_alias: site2-segment-repl
+              replication_server: site1-segment-repl  # Primary site segment for mirror replication

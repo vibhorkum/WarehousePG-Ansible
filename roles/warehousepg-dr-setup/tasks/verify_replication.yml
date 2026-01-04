@@ -1,0 +1,111 @@
+---
+# Verify DR Replication Status
+
+- name: Check standby coordinator replication lag
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}
+    psql -d template1 -t -c "
+      SELECT 
+        application_name,
+        client_addr,
+        state,
+        pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), sent_lsn)) AS send_lag,
+        pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn)) AS replay_lag
+      FROM pg_stat_replication 
+      WHERE application_name = 'gp_walreceiver';
+    "
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: standby_replication_lag
+  changed_when: false
+  when: whpg_dr_enable_standby_coordinator | bool
+
+- name: Display standby replication status
+  debug:
+    msg:
+      - "Standby Coordinator Replication Status:"
+      - "{{ standby_replication_lag.stdout_lines }}"
+  when:
+    - whpg_dr_enable_standby_coordinator | bool
+    - standby_replication_lag.stdout | length > 0
+
+- name: Check segment mirror synchronization status
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}
+    psql -d template1 -t -c "
+      SELECT 
+        content,
+        role,
+        preferred_role,
+        mode,
+        status
+      FROM gp_segment_configuration 
+      WHERE role = 'm'
+      ORDER BY content;
+    "
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: mirror_sync_status
+  changed_when: false
+  when: whpg_dr_enable_segment_mirrors | bool
+
+- name: Display mirror synchronization status
+  debug:
+    msg:
+      - "Segment Mirror Status:"
+      - "{{ mirror_sync_status.stdout_lines }}"
+  when:
+    - whpg_dr_enable_segment_mirrors | bool
+    - mirror_sync_status.stdout | length > 0
+
+- name: Run full cluster status check
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}
+    gpstate -e
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: full_cluster_status
+  changed_when: false
+  failed_when:
+    - full_cluster_status.rc != 0
+    - full_cluster_status.rc != 1  # Exit code 1 means warnings (e.g., mirrors down), which is acceptable
+
+- name: Display full cluster status
+  debug:
+    msg:
+      - "========================================="
+      - "Full Cluster Status with DR Configuration"
+      - "========================================="
+      - "{{ full_cluster_status.stdout_lines }}"
+
+- name: Verify all mirrors are in sync
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}
+    psql -d template1 -t -c "
+      SELECT count(*) FROM gp_segment_configuration 
+      WHERE role = 'm' AND mode != 's';
+    "
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: out_of_sync_mirrors
+  changed_when: false
+  when: whpg_dr_enable_segment_mirrors | bool
+
+- name: Assert all mirrors are synchronized
+  assert:
+    that:
+      - out_of_sync_mirrors.stdout | trim | int == 0
+    fail_msg: "Warning: {{ out_of_sync_mirrors.stdout | trim }} mirror(s) are not in sync mode"
+    success_msg: "All segment mirrors are in sync mode"
+  when:
+    - whpg_dr_enable_segment_mirrors | bool
+    - out_of_sync_mirrors is defined
+  ignore_errors: yes

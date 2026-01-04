@@ -7,11 +7,11 @@
 
 - name: Calculate actual system memory in GB
   set_fact:
-    actual_system_memory_gb: "{{ (ansible_memtotal_mb / 1024) | round(0, 'floor') | int }}"
+    actual_system_memory_gb: "{{ (ansible_facts['memtotal_mb'] / 1024) | round(0, 'floor') | int }}"
 
 - name: Display detected system memory
   debug:
-    msg: "Detected system memory: {{ actual_system_memory_gb }} GB ({{ ansible_memtotal_mb }} MB)"
+    msg: "Detected system memory: {{ actual_system_memory_gb }} GB ({{ ansible_facts['memtotal_mb'] }} MB)"
 
 - name: Use detected memory if whpg_system_memory_gb not explicitly set
   set_fact:
@@ -78,7 +78,7 @@
     state: present
     sysctl_file: /etc/sysctl.conf
     reload: no
-  when: "'azure' in group_names or 'Azure' in ansible_system_vendor | default('')"
+  when: "'azure' in group_names or 'Azure' in ansible_facts.get('system_vendor', '')"
 
 - name: Configure kernel semaphore parameters
   become: yes

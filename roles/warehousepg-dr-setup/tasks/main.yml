@@ -1,0 +1,52 @@
+---
+# Main tasks for WarehousePG DR Setup Role
+
+- name: Display DR setup information
+  debug:
+    msg:
+      - "========================================="
+      - "WarehousePG DR Site Setup"
+      - "========================================="
+      - "Standby Coordinator: {{ whpg_dr_enable_standby_coordinator }}"
+      - "Segment Mirrors: {{ whpg_dr_enable_segment_mirrors }}"
+      - "DR Site Hosts: {{ groups['whpg_dr_site'] | default([]) | length }} total"
+  run_once: true
+  tags: [dr, setup]
+
+- name: Validate DR site configuration
+  include_tasks: validate_dr_config.yml
+  run_once: true
+  tags: [dr, setup, validate]
+
+- name: Setup standby coordinator on DR site
+  include_tasks: setup_standby_coordinator.yml
+  when:
+    - whpg_dr_enable_standby_coordinator | bool
+    - groups['whpg_dr_coordinator'] is defined
+    - groups['whpg_dr_coordinator'] | length > 0
+  tags: [dr, setup, standby]
+
+- name: Setup segment mirrors on DR site
+  include_tasks: setup_segment_mirrors.yml
+  when:
+    - whpg_dr_enable_segment_mirrors | bool
+    - groups['whpg_dr_segments'] is defined
+    - groups['whpg_dr_segments'] | length > 0
+  tags: [dr, setup, mirrors]
+
+- name: Verify DR replication status
+  include_tasks: verify_replication.yml
+  when: whpg_verify_replication | bool
+  tags: [dr, setup, verify]
+
+- name: Display DR setup completion summary
+  debug:
+    msg:
+      - "========================================="
+      - "WarehousePG DR Setup Complete"
+      - "========================================="
+      - "Standby Coordinator: {{ 'Configured' if whpg_dr_enable_standby_coordinator else 'Skipped' }}"
+      - "Segment Mirrors: {{ 'Configured' if whpg_dr_enable_segment_mirrors else 'Skipped' }}"
+      - "Use 'gpstate -f' to check replication status"
+  run_once: true
+  tags: [dr, setup]

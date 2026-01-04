@@ -1,14 +1,6 @@
 ---
 # Main tasks file for warehousepg-os-config
 
-- name: Include cleanup tasks if cleanup mode is enabled
-  include_tasks: cleanup.yml
-  when: whpg_cleanup_mode | bool
-  tags: [cleanup, uninstall]
-
-- name: Skip OS configuration tasks in cleanup mode
-  meta: end_play
-  when: whpg_cleanup_mode | bool
 
 - name: Include SELinux configuration tasks
   include_tasks: selinux.yml

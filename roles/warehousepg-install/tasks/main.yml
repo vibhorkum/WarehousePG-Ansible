@@ -1,15 +1,6 @@
 ---
 # WarehousePG Installation Tasks
 
-- name: Include cleanup tasks if cleanup mode is enabled
-  include_tasks: cleanup.yml
-  when: whpg_cleanup_mode | bool
-  tags: [cleanup, uninstall]
-
-- name: Skip installation tasks in cleanup mode
-  meta: end_play
-  when: whpg_cleanup_mode | bool
-
 - name: Include user management tasks
   include_tasks: user_management.yml
   tags: [user]
@@ -64,8 +55,53 @@
     name: "{{ whpg_packages }}"
     state: present
     update_cache: yes
+  register: package_install
+  failed_when: false
 
-- name: Verify WarehousePG installation
+- name: Display package installation result
+  debug:
+    msg: 
+      - "Installation: {{ 'SUCCESS' if package_install.rc == 0 else 'FAILED (RC: ' + (package_install.rc | string) + ')' }}"
+      - "{{ 'Changed: ' + (package_install.changed | string) if package_install.rc == 0 else 'Error: ' + (package_install.msg | default('Unknown error')) }}"
+  when: package_install is defined
+
+- name: Verify packages are actually installed
+  shell: rpm -q {{ item }}
+  loop: "{{ whpg_packages }}"
+  register: rpm_verify
+  failed_when: rpm_verify.rc != 0
+  changed_when: false
+
+- name: Check if symlink was created by package
+  stat:
+    path: /usr/local/greenplum-db
+  register: symlink_check
+
+- name: Display symlink status
+  debug:
+    msg: "Symlink /usr/local/greenplum-db: {{ 'EXISTS' if symlink_check.stat.exists else 'NOT CREATED - Package installation issue!' }}"
+
+- name: Verify postgres binary exists
+  stat:
+    path: /usr/local/greenplum-db/bin/postgres
+  register: postgres_binary
+  when: symlink_check.stat.exists
+
+- name: Assert package installation successful
+  assert:
+    that:
+      - package_install.rc == 0
+      - symlink_check.stat.exists
+      - postgres_binary.stat.exists | default(false)
+    fail_msg: |
+      Package installation failed!
+      - Installation return code: {{ package_install.rc | default('unknown') }}
+      - Symlink exists: {{ symlink_check.stat.exists }}
+      - Binary exists: {{ postgres_binary.stat.exists | default(false) }}
+      Check the package installation output above for dependency errors.
+    success_msg: "WarehousePG packages installed successfully"
+
+- name: Verify WarehousePG version
   command: "{{ whpg_install_path }}/bin/postgres --version"
   register: whpg_version_check
   changed_when: false

@@ -1,0 +1,172 @@
+---
+# WarehousePG DR Site Setup Playbook
+# This playbook:
+#   1. Configures OS settings on DR site hosts
+#   2. Installs WarehousePG on DR site hosts
+#   3. Creates storage directories on DR site hosts
+#   4. Sets up replication from primary to DR site
+#
+# Usage:
+#   ansible-playbook -i test_inventory.yml dr_setup.yml
+#   ansible-playbook -i test_inventory.yml dr_setup.yml --tags standby  # Standby only
+#   ansible-playbook -i test_inventory.yml dr_setup.yml --tags mirrors  # Mirrors only
+#   ansible-playbook -i test_inventory.yml dr_setup.yml --tags install  # Installation only
+
+# Phase 1: Configure OS on DR site hosts
+- name: Configure Operating System on DR Site
+  hosts: whpg_dr_site
+  become: yes
+  gather_facts: yes
+  
+  roles:
+    - role: warehousepg-os-config
+      tags: [os, install]
+
+# Phase 2: Install WarehousePG on DR site hosts
+- name: Install WarehousePG on DR Site
+  hosts: whpg_dr_site
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    # EDB subscription token - required for installation
+    # Override this via command line or group_vars
+    edb_subscription_token: ""
+  
+  roles:
+    - role: warehousepg-install
+      vars:
+        edb_subscription_token: "{{ edb_subscription_token }}"
+      tags: [install, packages]
+
+# Phase 3: Setup storage on DR site hosts
+- name: Setup Storage on DR Site
+  hosts: whpg_dr_site
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    # Storage directories - should match primary site
+    whpg_data_directories:
+      - /data/primary/seg1
+      - /data/primary/seg2
+    whpg_mirror_data_directories:
+      - /data/mirror/seg1
+      - /data/mirror/seg2
+    whpg_coordinator_data_directory: /data/coordinator
+    # Force creation on DR site (fresh install)
+    whpg_force_create: true
+    # Enable directory creation flags
+    whpg_create_coordinator_dirs: true
+    whpg_create_primary_dirs: true
+    whpg_create_mirror_dirs: true
+  
+  roles:
+    - role: warehousepg-storage
+      tags: [storage, install]
+
+# Phase 3b: Update /etc/hosts on primary site with DR site aliases for replication
+- name: Configure /etc/hosts on Primary Site for Cross-Site Replication
+  hosts: whpg_primary_site
+  become: yes
+  gather_facts: yes
+  
+  tasks:
+    - name: Update /etc/hosts with all site information
+      include_role:
+        name: warehousepg-install
+        tasks_from: configure_hosts
+      tags: [hosts, install]
+
+# Phase 3c: Setup passwordless SSH between primary and DR sites
+- name: Configure Cross-Site SSH for DR Replication
+  hosts: whpg_primary_site:whpg_dr_site
+  become: yes
+  gather_facts: yes
+  
+  tasks:
+    - name: Setup passwordless SSH for gpadmin across all sites
+      include_role:
+        name: warehousepg-install
+        tasks_from: passwordless_ssh
+      tags: [ssh, install]
+
+# Phase 4: Configure DR replication
+- name: Setup WarehousePG DR Site Replication
+  hosts: whpg_primary_coordinator
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    # DR configuration
+    whpg_dr_enable_standby_coordinator: true
+    whpg_dr_enable_segment_mirrors: true
+    
+    # Base configuration
+    whpg_base_dir: /usr/local/greenplum-db
+    whpg_admin_home_dir: /home/gpadmin
+    
+    # Standby coordinator settings
+    whpg_standby_port: 5433
+    whpg_coordinator_data_directory: /data/coordinator/gpseg-1
+    
+    # Mirror settings - should match your segment configuration
+    whpg_mirror_port_offset: 7000
+    whpg_data_directories:
+      - /data/primary/seg1
+      - /data/primary/seg2
+    whpg_mirror_data_directories:
+      - /data/mirror/seg1
+      - /data/mirror/seg2
+  
+  pre_tasks:
+    - name: Validate required groups exist
+      assert:
+        that:
+          - groups['whpg_primary_coordinator'] is defined
+          - groups['whpg_dr_site'] is defined
+        fail_msg: "Required inventory groups not found. Need whpg_primary_coordinator and whpg_dr_site"
+      run_once: true
+      tags: always
+    
+    - name: Display DR replication setup plan
+      debug:
+        msg:
+          - "========================================="
+          - "WarehousePG DR Replication Setup (Phase 4/4)"
+          - "========================================="
+          - "Primary Coordinator: {{ groups['whpg_primary_coordinator'][0] }}"
+          - "Primary Segments: {{ groups['whpg_primary_segments'] | length }}"
+          - "DR Coordinator: {{ groups['whpg_dr_coordinator'][0] if groups['whpg_dr_coordinator'] is defined else 'None' }}"
+          - "DR Segments: {{ groups['whpg_dr_segments'] | length if groups['whpg_dr_segments'] is defined else 0 }}"
+          - "Standby Enabled: {{ whpg_dr_enable_standby_coordinator }}"
+          - "Mirrors Enabled: {{ whpg_dr_enable_segment_mirrors }}"
+      run_once: true
+      tags: always
+  
+  roles:
+    - role: warehousepg-dr-setup
+      tags: [dr, setup]
+  
+  post_tasks:
+    - name: Display next steps
+      debug:
+        msg:
+          - "========================================="
+          - "DR Setup Complete - Next Steps"
+          - "========================================="
+          - "1. Verify replication: gpstate -f (standby) and gpstate -m (mirrors)"
+          - "2. Test DR failover procedure in non-production environment"
+          - "3. Document failover runbook for your team"
+          - "4. Schedule regular DR drills"
+          - ""
+          - "Failover Commands:"
+          - "  - Promote standby: gpactivatestandby -d {{ whpg_coordinator_data_directory }}"
+          - "  - Activate mirrors: gprecoverseg -a"
+          - ""
+          - "Verification Commands:"
+          - "  - Check cluster status: gpstate -e"
+          - "  - Check standby: gpstate -f"
+          - "  - Check mirrors: gpstate -m"
+      run_once: true
+      tags: always

@@ -1,0 +1,41 @@
+# Log files
+*.log
+*.logs
+logs/
+
+# Ansible retry files
+*.retry
+
+# Vault password files
+.vault_pass
+.vault_password
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Editor directories
+.vscode/
+.idea/
+*.sublime-*
+
+# Backup files
+*.bak
+*.backup
+
+# Ansible facts cache
+*.fact
+
+# Test/temporary playbooks
+test_*.yml.bak
+*_backup.yml

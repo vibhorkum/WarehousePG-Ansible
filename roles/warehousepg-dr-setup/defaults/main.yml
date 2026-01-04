@@ -1,0 +1,23 @@
+---
+# Default variables for WarehousePG DR Setup Role
+
+# Enable standby coordinator setup
+whpg_dr_enable_standby_coordinator: true
+
+# Enable segment mirrors on DR site
+whpg_dr_enable_segment_mirrors: true
+
+# Standby coordinator configuration
+whpg_standby_coordinator_port: "{{ whpg_standby_port | default(5433) }}"
+whpg_standby_data_directory: "{{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}"
+
+# Mirror configuration
+whpg_mirror_port_base: "{{ whpg_mirror_port_offset | default(7000) }}"
+
+# Replication settings
+whpg_replication_checkpoint_segments: 8
+whpg_replication_timeout: 300
+
+# Verification settings
+whpg_verify_replication: true
+whpg_replication_lag_threshold_mb: 100
