@@ -1,3 +1,0 @@
-{% for host in groups['whpg_primary_segments'] | default([]) %}
-{{ hostvars[host].hostname | default(host) }}
-{% endfor %}
