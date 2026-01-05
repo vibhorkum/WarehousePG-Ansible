@@ -29,14 +29,11 @@
   gather_facts: yes
   
   vars:
-    # EDB subscription token - required for installation
-    # Override this via command line or group_vars
-    edb_subscription_token: ""
+    # EDB Repository Token (REQUIRED - update with your token)
+    edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"
   
   roles:
     - role: warehousepg-install
-      vars:
-        edb_subscription_token: "{{ edb_subscription_token }}"
       tags: [install, packages]
 
 # Phase 3: Setup storage on DR site hosts

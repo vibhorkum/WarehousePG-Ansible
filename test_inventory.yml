@@ -39,18 +39,17 @@ all:
             #   ansible_host: 18.226.172.108
             #   private_ip: 10.0.9.62
             #   hostname: site1-segment2, Subnets 10.0.10.0/24, 10.0.12.0/24)
-    # Uses SAME hostnames as Site 1 (whpg-coordinator, whpg-segment)
-    # Site-local /etc/hosts maps to Site 2 IPs (10.0.10.232, 10.0.12.215)
-    # After failover promotion, no hostname changes needed in catalog
+    # DR Site uses UNIQUE hostnames (dr-coordinator, dr-segment) to avoid conflicts
+    # This allows cross-site mirroring where DR can resolve primary hostnames
+    # For failover scenarios, update /etc/hosts to swap hostname mappings
     # NOTE: Inventory names must be unique (dr-coordinator, dr-segment)
-    #       but hostname variable is set to same as primary (whpg-coordinator, whpg-segment)
     whpg_dr_site:
       children:
         whpg_dr_coordinator:
           hosts:
             dr-coordinator:
               ansible_host: 3.137.161.206
-              hostname: whpg-coordinator
+              hostname: dr-coordinator
               private_ip: 10.0.10.232
               use_private_ip: true
               site_name: site2
@@ -63,7 +62,7 @@ all:
           hosts:
             dr-segment:
               ansible_host: 3.139.108.84
-              hostname: whpg-segment
+              hostname: dr-segment
               private_ip: 10.0.12.215
               use_private_ip: true
               site_name: site2

@@ -76,7 +76,30 @@
   changed_when: false
   failed_when: false
 
-- name: Recover and sync mirrors (full recovery for new mirrors)
+# Check if mirror data directories exist on DR segment
+# If they don't exist, we need full recovery even if mirrors are already in catalog
+- name: Check if mirror data directories exist
+  become: yes
+  become_user: gpadmin
+  stat:
+    path: "{{ whpg_mirror_data_directories[0] | default('/data/mirror/seg1') }}/global/pg_control"
+  delegate_to: "{{ groups['whpg_dr_segments'][0] }}"
+  register: mirror_dir_check
+  failed_when: false
+
+- name: Determine recovery type needed
+  set_fact:
+    needs_full_recovery: "{{ add_mirrors.changed or not mirror_dir_check.stat.exists | default(false) }}"
+
+- name: Debug recovery type decision
+  debug:
+    msg:
+      - "Mirrors added this run: {{ add_mirrors.changed }}"
+      - "Mirror pg_control exists: {{ mirror_dir_check.stat.exists | default(false) }}"
+      - "Needs full recovery: {{ needs_full_recovery }}"
+      - "Mirrors down count: {{ mirrors_down_count.stdout | trim }}"
+
+- name: Recover and sync mirrors (full recovery for new/uninitialized mirrors)
   become: yes
   become_user: gpadmin
   shell: |
@@ -86,13 +109,13 @@
   delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
   register: recover_mirrors_full
   when: 
-    - add_mirrors.changed
+    - needs_full_recovery
     - mirrors_down_count.stdout | trim | int > 0
   failed_when:
     - recover_mirrors_full.rc != 0
     - "'No segments to recover' not in recover_mirrors_full.stdout"
 
-- name: Recover and sync mirrors (incremental for existing mirrors)
+- name: Recover and sync mirrors (incremental for existing initialized mirrors)
   become: yes
   become_user: gpadmin
   shell: |
@@ -102,7 +125,7 @@
   delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
   register: recover_mirrors_inc
   when:
-    - not add_mirrors.changed
+    - not needs_full_recovery
     - mirrors_down_count.stdout | trim | int > 0
   failed_when:
     - recover_mirrors_inc.rc != 0

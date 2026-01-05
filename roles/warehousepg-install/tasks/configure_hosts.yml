@@ -1,11 +1,11 @@
 ---
 # /etc/hosts Configuration Tasks
-# Supports identical hostnames across primary and DR sites with site-specific IPs
+# Supports both same-site and cross-site hostname resolution
 #
 # Design:
 # - Same-site hosts: Added with hostname + replication_alias (e.g., "10.0.9.61 whpg-segment site1-segment-repl")
-# - Cross-site hosts: Added with replication_alias ONLY (e.g., "10.0.12.215 site2-segment-repl")
-# - This allows hostname to resolve to local site IP, while replication_alias reaches remote site
+# - Cross-site hosts: Added with hostname + replication_alias (e.g., "10.0.12.215 dr-segment site2-segment-repl")
+# - With unique hostnames per site, gpaddmirrors and other tools can resolve both local and remote hosts
 
 - name: Set system hostname from inventory
   become: yes
@@ -75,23 +75,22 @@
   loop: "{{ same_site_hosts }}"
   when: same_site_hosts | length > 0
 
-# Add cross-site hosts with replication_alias ONLY (not hostname, since it's shared)
-- name: Add cross-site hosts to /etc/hosts (replication_alias only)
+# Add cross-site hosts with hostname + replication_alias
+# This allows gpaddmirrors and other tools to resolve remote hostnames
+- name: Add cross-site hosts to /etc/hosts (hostname + replication_alias)
   become: yes
   lineinfile:
     path: /etc/hosts
-    line: "{{ ((hostvars[item].use_private_ip | default(whpg_hosts_ip_preference == 'private_ip')) and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].replication_alias }}"
-    regexp: "^.*\\s+{{ hostvars[item].replication_alias }}(\\s|$)"
+    line: "{{ ((hostvars[item].use_private_ip | default(whpg_hosts_ip_preference == 'private_ip')) and hostvars[item].private_ip is defined) | ternary(hostvars[item].private_ip, hostvars[item].ansible_host) }} {{ hostvars[item].hostname | default(item) }}{% if hostvars[item].replication_alias is defined %} {{ hostvars[item].replication_alias }}{% endif %}"
+    regexp: "^.*\\s+{{ hostvars[item].hostname | default(item) }}(\\s|$)"
     state: present
   loop: "{{ cross_site_hosts }}"
-  when: 
-    - cross_site_hosts | length > 0
-    - hostvars[item].replication_alias is defined
+  when: cross_site_hosts | length > 0
 
 - name: Display /etc/hosts configuration summary
   debug:
     msg:
       - "Current site: {{ current_site }}"
       - "Same-site hosts (hostname + alias): {{ same_site_hosts | join(', ') | default('none') }}"
-      - "Cross-site hosts (alias only): {{ cross_site_hosts | join(', ') | default('none') }}"
+      - "Cross-site hosts (hostname + alias): {{ cross_site_hosts | join(', ') | default('none') }}"
       - "IP preference: {{ whpg_hosts_ip_preference | default('public_ip') }}"
