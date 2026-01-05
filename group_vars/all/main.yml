@@ -5,7 +5,7 @@
 # ansible_ssh_private_key_file: /path/to/your/key.pem
 
 # WarehousePG version
-whpg_version: "7"
+whpg_version: "7.3.0"
 whpg_rpm_version: "7.3.0-WHPG"
 
 # Cluster configuration

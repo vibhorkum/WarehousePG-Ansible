@@ -26,9 +26,9 @@ whpg_hosts_ip_preference: "private_ip"
 edb_subscription_token: ""
 
 # WarehousePG Installation
-whpg_version: "7"
-whpg_install_path: "/usr/local/greenplum-db"
-whpg_rpm_version: "7.3.0-WHPG"
+whpg_version: "7.3.0"  # WarehousePG version number
+whpg_install_path: "/usr/local/greenplum-db-{{ whpg_version }}-WHPG"
+whpg_clients_path: "/usr/local/greenplum-db-clients-{{ whpg_version }}-WHPG"
 
 # Packages to install
 whpg_packages:

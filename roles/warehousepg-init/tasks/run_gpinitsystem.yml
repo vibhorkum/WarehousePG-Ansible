@@ -16,37 +16,150 @@
   ansible.builtin.debug:
     msg: "gpinitsystem utility found at: {{ gpinitsystem_check.stdout }}"
 
-- name: Build gpinitsystem command
+# Step 1: Generate the input configuration file using -c and -O
+- name: Build gpinitsystem config generation command
   ansible.builtin.set_fact:
-    gpinitsystem_cmd: >-
-      source {{ whpg_gphome }}/greenplum_path.sh &&
+    gpinitsystem_genconfig_cmd: >-
       gpinitsystem
       -c {{ whpg_config_dir }}/gpinitsystem_config
       -h {{ whpg_config_dir }}/hostfile_gpinitsystem
       {% if whpg_enable_mirrors and whpg_use_dr_site_mirrors %}-m {{ whpg_config_dir }}/hostfile_mirror_segments{% endif %}
-      {% if whpg_save_config %}-O {{ whpg_output_config_file }}{% endif %}
+      -O {{ whpg_output_config_file }}
       {% if whpg_standby_coordinator_hostname %}-s {{ whpg_standby_coordinator_hostname }}{% endif %}
       {% if whpg_enable_mirrors and not whpg_use_dr_site_mirrors %}--mirror-mode={{ whpg_mirror_mode }}{% endif %}
       {% if whpg_enable_mirrors and whpg_use_dr_site_mirrors %}--mirror-mode=spread{% endif %}
       -a
 
-- name: Display gpinitsystem command
-  ansible.builtin.debug:
-    msg: "Running: {{ gpinitsystem_cmd }}"
+# Step 2: Initialize the cluster using -I (the generated config file)
+- name: Build gpinitsystem initialization command
+  ansible.builtin.set_fact:
+    gpinitsystem_init_cmd: >-
+      gpinitsystem
+      -I {{ whpg_output_config_file }}
+      -a
 
-- name: Initialize WarehousePG cluster with gpinitsystem
+
+- name: Display gpinitsystem commands
+  ansible.builtin.debug:
+    msg: |
+      Step 1 - Generate config: {{ gpinitsystem_genconfig_cmd }}
+      Step 2 - Initialize cluster: {{ gpinitsystem_init_cmd }}
+
+# Run gpinitsystem in background with nohup to avoid TTY dependency
+# gpinitsystem has issues when not running in a real terminal - running it in background
+# and polling for completion is a reliable workaround
+- name: Set up gpinitsystem output file
   become: true
   become_user: gpadmin
-  ansible.builtin.shell: "{{ gpinitsystem_cmd }}"
+  ansible.builtin.file:
+    path: /home/gpadmin/gpinitsystem_output.log
+    state: absent
+  changed_when: false
+
+- name: Step 1 - Generate input configuration file
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: |
+    cd /home/gpadmin
+    source {{ whpg_gphome }}/greenplum_path.sh
+    {{ gpinitsystem_genconfig_cmd }} >> /home/gpadmin/gpinitsystem_output.log 2>&1
   args:
     executable: /bin/bash
-  register: gpinitsystem_output
-  changed_when: "'Greenplum Database instance successfully created' in gpinitsystem_output.stdout or 'WarehousePG instance successfully created' in gpinitsystem_output.stdout"
-  failed_when: gpinitsystem_output.rc != 0
+  register: gpinitsystem_genconfig_result
+  changed_when: true
+
+- name: Verify input configuration file was created
+  become: true
+  become_user: gpadmin
+  ansible.builtin.stat:
+    path: "{{ whpg_output_config_file }}"
+  register: input_config_file
+
+- name: Fail if input configuration file was not created
+  ansible.builtin.fail:
+    msg: |
+      Failed to generate input configuration file: {{ whpg_output_config_file }}
+      Check /home/gpadmin/gpinitsystem_output.log for details.
+  when: not input_config_file.stat.exists
+
+- name: Display input configuration file
+  become: true
+  become_user: gpadmin
+  ansible.builtin.command: cat {{ whpg_output_config_file }}
+  register: input_config_content
+  changed_when: false
+
+- name: Show input configuration
+  ansible.builtin.debug:
+    msg: "{{ input_config_content.stdout }}"
+
+- name: Step 2 - Initialize WarehousePG cluster with gpinitsystem (background)
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: |
+    cd /home/gpadmin
+    source {{ whpg_gphome }}/greenplum_path.sh
+    {{ gpinitsystem_init_cmd }} >> /home/gpadmin/gpinitsystem_output.log 2>&1 &
+    echo $!
+    disown
+  args:
+    executable: /bin/bash
+  register: gpinitsystem_pid
+  changed_when: true
+
+- name: Display gpinitsystem PID
+  ansible.builtin.debug:
+    msg: "gpinitsystem started with PID: {{ gpinitsystem_pid.stdout }}"
+
+- name: Wait for gpinitsystem to complete (check for completion markers)
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: |
+    # Check if process is still running
+    if ps -p {{ gpinitsystem_pid.stdout }} > /dev/null 2>&1; then
+      echo "RUNNING"
+    else
+      # Process finished, check for success markers in log
+      if grep -q "Greenplum Database instance successfully created" /home/gpadmin/gpinitsystem_output.log 2>/dev/null; then
+        echo "SUCCESS"
+      elif grep -q "FATAL" /home/gpadmin/gpinitsystem_output.log 2>/dev/null; then
+        echo "FAILED"
+      else
+        echo "COMPLETED"
+      fi
+    fi
+  args:
+    executable: /bin/bash
+  register: gpinitsystem_status
+  until: gpinitsystem_status.stdout != "RUNNING"
+  retries: 120
+  delay: 10
+  changed_when: false
+
+- name: Read gpinitsystem output log
+  become: true
+  become_user: gpadmin
+  ansible.builtin.slurp:
+    src: /home/gpadmin/gpinitsystem_output.log
+  register: gpinitsystem_log
 
 - name: Display gpinitsystem output
   ansible.builtin.debug:
-    var: gpinitsystem_output.stdout_lines
+    msg: "{{ gpinitsystem_log.content | b64decode }}"
+
+- name: Fail if gpinitsystem did not complete successfully
+  ansible.builtin.fail:
+    msg: |
+      gpinitsystem failed to initialize the cluster.
+      Please check the output above and /home/gpadmin/gpAdminLogs for details.
+      Common causes:
+      - Coordinator data directory already exists
+      - Segment data directories already exist  
+      - Port conflicts
+      - Network connectivity issues
+  when: >
+    gpinitsystem_status.stdout == "FAILED" or
+    'FATAL' in (gpinitsystem_log.content | b64decode)
 
 - name: Check for backout script
   become: true
@@ -56,7 +169,7 @@
     patterns: 'backout_gpinitsystem_*'
     file_type: file
   register: backout_scripts
-  when: gpinitsystem_output.rc != 0
+  when: gpinitsystem_status.stdout == "FAILED"
 
 - name: Display backout script information
   ansible.builtin.debug:
@@ -65,20 +178,24 @@
       {{ backout_scripts.files[0].path if backout_scripts.files else 'No backout script found' }}
       Run this script to clean up partial installation.
   when: 
-    - gpinitsystem_output.rc != 0
+    - gpinitsystem_status.stdout == "FAILED"
+    - backout_scripts.files is defined
     - backout_scripts.files | length > 0
 
-- name: Verify coordinator data directory was created
+- name: Wait for coordinator data directory to be created
   become: true
   become_user: gpadmin
   ansible.builtin.stat:
     path: "{{ whpg_coordinator_directory }}/gpseg-1"
   register: verify_coordinator_dir
+  until: verify_coordinator_dir.stat.exists | default(false)
+  retries: 30
+  delay: 5
 
 - name: Assert coordinator directory exists
   ansible.builtin.assert:
     that:
       - verify_coordinator_dir.stat.exists
       - verify_coordinator_dir.stat.isdir
-    fail_msg: "Coordinator data directory was not created successfully"
+    fail_msg: "Coordinator data directory was not created successfully after waiting"
     success_msg: "WarehousePG cluster initialized successfully"

@@ -49,14 +49,37 @@
   command: dnf clean all
   changed_when: false
 
-- name: Install WarehousePG packages
+- name: Install WarehousePG server package
   become: yes
   dnf:
-    name: "{{ whpg_packages }}"
+    name: warehouse-pg-7
     state: present
     update_cache: yes
-  register: package_install
+  register: server_install
   failed_when: false
+
+- name: Install WarehousePG clients package
+  become: yes
+  dnf:
+    name: warehouse-pg-clients
+    state: present
+  register: clients_install
+  failed_when: false
+
+- name: Install WarehousePG backup package
+  become: yes
+  dnf:
+    name: whpg-backup
+    state: present
+  register: backup_install
+  failed_when: false
+
+- name: Combine package installation results
+  set_fact:
+    package_install:
+      rc: "{{ 0 if (server_install.rc == 0 and clients_install.rc == 0 and backup_install.rc == 0) else 1 }}"
+      changed: "{{ server_install.changed or clients_install.changed or backup_install.changed }}"
+      msg: "Server: {{ 'OK' if server_install.rc == 0 else 'FAILED' }}, Clients: {{ 'OK' if clients_install.rc == 0 else 'FAILED' }}, Backup: {{ 'OK' if backup_install.rc == 0 else 'FAILED' }}"
 
 - name: Display package installation result
   debug:
@@ -72,37 +95,37 @@
   failed_when: rpm_verify.rc != 0
   changed_when: false
 
-- name: Check if symlink was created by package
+- name: Check if WarehousePG installation directory exists
   stat:
-    path: /usr/local/greenplum-db
-  register: symlink_check
+    path: "/usr/local/greenplum-db-{{ whpg_version }}-WHPG"
+  register: install_dir_check
 
-- name: Display symlink status
+- name: Display installation directory status
   debug:
-    msg: "Symlink /usr/local/greenplum-db: {{ 'EXISTS' if symlink_check.stat.exists else 'NOT CREATED - Package installation issue!' }}"
+    msg: "Installation directory /usr/local/greenplum-db-{{ whpg_version }}-WHPG: {{ 'EXISTS' if install_dir_check.stat.exists else 'NOT FOUND - Package installation failed!' }}"
 
 - name: Verify postgres binary exists
   stat:
-    path: /usr/local/greenplum-db/bin/postgres
+    path: "/usr/local/greenplum-db-{{ whpg_version }}-WHPG/bin/postgres"
   register: postgres_binary
-  when: symlink_check.stat.exists
+  when: install_dir_check.stat.exists
 
 - name: Assert package installation successful
   assert:
     that:
       - package_install.rc == 0
-      - symlink_check.stat.exists
+      - install_dir_check.stat.exists
       - postgres_binary.stat.exists | default(false)
     fail_msg: |
       Package installation failed!
       - Installation return code: {{ package_install.rc | default('unknown') }}
-      - Symlink exists: {{ symlink_check.stat.exists }}
+      - Installation directory exists: {{ install_dir_check.stat.exists }}
       - Binary exists: {{ postgres_binary.stat.exists | default(false) }}
       Check the package installation output above for dependency errors.
     success_msg: "WarehousePG packages installed successfully"
 
 - name: Verify WarehousePG version
-  command: "{{ whpg_install_path }}/bin/postgres --version"
+  command: "/usr/local/greenplum-db-{{ whpg_version }}-WHPG/bin/postgres --version"
   register: whpg_version_check
   changed_when: false
 

@@ -103,7 +103,7 @@
     whpg_dr_enable_segment_mirrors: true
     
     # Base configuration
-    whpg_base_dir: /usr/local/greenplum-db
+    whpg_base_dir: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
     whpg_admin_home_dir: /home/gpadmin
     
     # Standby coordinator settings

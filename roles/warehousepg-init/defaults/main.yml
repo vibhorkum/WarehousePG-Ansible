@@ -2,7 +2,7 @@
 # Default variables for warehousepg-init role
 
 # GPHOME directory where WarehousePG is installed
-whpg_gphome: "/usr/local/greenplum-db"
+whpg_gphome: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
 
 # Configuration directory for gpinitsystem files
 whpg_config_dir: "/home/gpadmin/gpconfigs"

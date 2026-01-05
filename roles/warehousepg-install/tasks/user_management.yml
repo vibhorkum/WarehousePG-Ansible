@@ -54,3 +54,37 @@
     name: "{{ whpg_gpadmin_user }}"
     groups: wheel
     append: yes
+# Configure gpadmin shell environment for WarehousePG
+# This MUST run on ALL hosts (coordinator and segments) BEFORE gpinitsystem
+- name: Check if .bashrc already has WarehousePG configuration
+  become: true
+  become_user: gpadmin
+  ansible.builtin.shell: |
+    grep -q "greenplum_path.sh" /home/gpadmin/.bashrc
+  args:
+    executable: /bin/bash
+  register: bashrc_whpg_check
+  changed_when: false
+  failed_when: false
+
+- name: Add WarehousePG environment to gpadmin .bashrc
+  become: true
+  become_user: gpadmin
+  ansible.builtin.blockinfile:
+    path: /home/gpadmin/.bashrc
+    block: |
+      # WarehousePG environment configuration
+      # Source WarehousePG environment if it exists
+      if [ -f /usr/local/greenplum-db/greenplum_path.sh ]; then
+        source /usr/local/greenplum-db/greenplum_path.sh
+      fi
+      
+      # Set coordinator data directory (required for gpstate, gpstop, etc.)
+      export COORDINATOR_DATA_DIRECTORY=/data/coordinator/gpseg-1
+      
+      # Set default database connection parameters
+      export PGPORT=5432
+      export PGUSER=gpadmin
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - WarehousePG Environment"
+    create: false
+  when: bashrc_whpg_check.rc != 0

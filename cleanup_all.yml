@@ -13,7 +13,7 @@
     - name: Check if cluster is running
       become_user: gpadmin
       shell: |
-        source /usr/local/greenplum-db/greenplum_path.sh 2>/dev/null || true
+        source /usr/local/greenplum-db-7.3.0-WHPG/greenplum_path.sh 2>/dev/null || true
         export COORDINATOR_DATA_DIRECTORY=/data/coordinator/gpseg-1
         gpstate -s 2>/dev/null || echo "not_running"
       register: cluster_check
@@ -24,7 +24,7 @@
     - name: Stop WarehousePG cluster
       become_user: gpadmin
       shell: |
-        source /usr/local/greenplum-db/greenplum_path.sh
+        source /usr/local/greenplum-db-7.3.0-WHPG/greenplum_path.sh
         export COORDINATOR_DATA_DIRECTORY=/data/coordinator/gpseg-1
         gpstop -a -M fast
       when: 
@@ -97,13 +97,14 @@
         - /data/standby
       ignore_errors: yes
 
-    - name: Remove WarehousePG installation
+    - name: Remove WarehousePG installation directories
       file:
         path: "{{ item }}"
         state: absent
       loop:
-        - /usr/local/greenplum-db-7.3.0-WHPG
+        - "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
         - /usr/local/greenplum-db
+        - "/usr/local/greenplum-db-clients-{{ whpg_version | default('7.3.0') }}-WHPG"
       ignore_errors: yes
 
     - name: Terminate gpadmin user sessions
@@ -142,11 +143,9 @@
     - name: Remove WarehousePG packages
       yum:
         name:
-          - WarehousePG
-          - WarehousePG-server
-          - WarehousePG-clients
-          - WarehousePG-libs
-          - WarehousePG-contrib
+          - warehouse-pg-7
+          - warehouse-pg-clients
+          - whpg-backup
         state: absent
       ignore_errors: yes
 

@@ -1,0 +1,14 @@
+---
+- name: Test SSH Configuration
+  hosts: whpg_primary_site
+  gather_facts: yes
+  become: yes
+  
+  vars:
+    whpg_gpadmin_user: "gpadmin"
+    whpg_gpadmin_home: "/home/gpadmin"
+    whpg_install_path: "/usr/local/greenplum-db-7.3.0-WHPG"
+    
+  tasks:
+    - name: Include passwordless SSH tasks
+      include_tasks: roles/warehousepg-install/tasks/passwordless_ssh.yml
