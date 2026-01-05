@@ -1,0 +1,87 @@
+---
+# Promote standby coordinator to primary
+
+- name: Get DR coordinator details
+  set_fact:
+    dr_coordinator_host: "{{ groups['whpg_dr_coordinator'][0] }}"
+    dr_coordinator_ip: "{{ hostvars[groups['whpg_dr_coordinator'][0]].private_ip | default(hostvars[groups['whpg_dr_coordinator'][0]].ansible_host) }}"
+  run_once: true
+
+- name: Check if standby coordinator is running on DR site
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    pg_isready -h localhost -p {{ whpg_coordinator_port }}
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: standby_running
+  changed_when: false
+  failed_when: false
+  run_once: true
+
+- name: Verify standby is running before promotion
+  assert:
+    that:
+      - standby_running.rc == 0
+    fail_msg: "Standby coordinator is not running on {{ dr_coordinator_host }}. Cannot proceed with failover."
+    success_msg: "Standby coordinator is running and ready for promotion."
+  run_once: true
+
+- name: Check if already promoted (recovery.signal exists)
+  become: yes
+  become_user: gpadmin
+  stat:
+    path: "{{ whpg_coordinator_data_directory }}/standby.signal"
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: standby_signal
+  run_once: true
+
+- name: Promote standby coordinator using gpactivatestandby
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpactivatestandby -d {{ whpg_coordinator_data_directory }} -a
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: promote_standby
+  when: standby_signal.stat.exists | default(false)
+  run_once: true
+
+- name: Display promotion result
+  debug:
+    msg: "{{ promote_standby.stdout_lines if promote_standby.changed else 'Standby already promoted or promotion skipped' }}"
+  run_once: true
+
+- name: Wait for promoted coordinator to be ready
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    pg_isready -h localhost -p {{ whpg_coordinator_port }} -t {{ whpg_startup_timeout }}
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: new_primary_ready
+  retries: 6
+  delay: 10
+  until: new_primary_ready.rc == 0
+  run_once: true
+
+- name: Verify new primary coordinator is accepting connections
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    psql -d template1 -c "SELECT 1;"
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: new_primary_test
+  changed_when: false
+  run_once: true
+
+- name: Display new primary status
+  debug:
+    msg:
+      - "Standby coordinator has been promoted to primary"
+      - "New primary coordinator: {{ dr_coordinator_host }}"
+      - "Connection test: {{ 'SUCCESS' if new_primary_test.rc == 0 else 'FAILED' }}"
+  run_once: true

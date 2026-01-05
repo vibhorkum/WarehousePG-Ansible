@@ -1,0 +1,124 @@
+---
+# Activate segment mirrors as new primaries
+
+- name: Get DR coordinator details for segment operations
+  set_fact:
+    dr_coordinator_host: "{{ groups['whpg_dr_coordinator'][0] }}"
+  run_once: true
+
+- name: Check segment status on new primary
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstate -e
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: segment_status
+  changed_when: false
+  run_once: true
+
+- name: Display current segment status
+  debug:
+    var: segment_status.stdout_lines
+  run_once: true
+
+- name: Check for down segments
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    psql -d template1 -t -c "
+      SELECT count(*) 
+      FROM gp_segment_configuration 
+      WHERE status = 'd';
+    "
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: down_segments
+  changed_when: false
+  run_once: true
+
+- name: Display down segment count
+  debug:
+    msg: "Down segments: {{ down_segments.stdout | trim }}"
+  run_once: true
+
+- name: Check segment configuration after promotion
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    psql -d template1 -c "
+      SELECT content, role, preferred_role, status, hostname, port, datadir
+      FROM gp_segment_configuration
+      ORDER BY content, role;
+    "
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: segment_config
+  changed_when: false
+  run_once: true
+
+- name: Display segment configuration
+  debug:
+    var: segment_config.stdout_lines
+  run_once: true
+
+# After failover, old primaries are down, mirrors (now on DR) should be up
+# If mirrors are still showing as mirrors but up, they've taken over as acting primaries
+- name: Check if segment recovery is needed
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    psql -d template1 -t -c "
+      SELECT count(*) 
+      FROM gp_segment_configuration 
+      WHERE status = 'd' AND role = 'p';
+    "
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: down_primaries
+  changed_when: false
+  run_once: true
+
+- name: Recover segments if primaries are down (mirrors take over)
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gprecoverseg -a
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: recover_segments
+  when: down_primaries.stdout | trim | int > 0
+  run_once: true
+  ignore_errors: yes
+
+- name: Display recovery result
+  debug:
+    msg: "{{ recover_segments.stdout_lines if recover_segments is defined and recover_segments.changed else 'No segment recovery needed' }}"
+  run_once: true
+
+- name: Wait for FTS to update segment status
+  pause:
+    seconds: 15
+  run_once: true
+
+- name: Trigger FTS probe to refresh segment status
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstate -e
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: fts_probe
+  changed_when: false
+  run_once: true
+
+- name: Display updated segment status
+  debug:
+    var: fts_probe.stdout_lines
+  run_once: true

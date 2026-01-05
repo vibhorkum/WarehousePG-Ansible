@@ -1,0 +1,69 @@
+---
+# Stop primary site (planned failover only)
+
+- name: Check if primary coordinator is running
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstate -Q
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: primary_running
+  changed_when: false
+  ignore_errors: yes
+  when: primary_is_accessible
+  run_once: true
+
+- name: Gracefully stop primary cluster
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstop -M fast -a
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: stop_primary
+  when:
+    - primary_is_accessible
+    - primary_running is succeeded
+    - "'running' in primary_running.stdout.lower() or primary_running.rc == 0"
+  run_once: true
+  ignore_errors: yes
+
+- name: Display stop result
+  debug:
+    msg: "{{ stop_primary.stdout_lines if stop_primary is defined and stop_primary.changed else 'Primary cluster stop skipped or not accessible' }}"
+  run_once: true
+
+- name: Wait for primary to fully stop
+  pause:
+    seconds: 10
+  when:
+    - stop_primary is defined
+    - stop_primary.changed
+  run_once: true
+
+- name: Verify primary is stopped
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    pg_isready -h localhost -p {{ whpg_coordinator_port }}
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: primary_stopped
+  failed_when: primary_stopped.rc == 0
+  changed_when: false
+  when: primary_is_accessible
+  run_once: true
+  ignore_errors: yes
+
+- name: Display primary status after stop
+  debug:
+    msg: "Primary coordinator has been stopped successfully"
+  when:
+    - primary_is_accessible
+    - primary_stopped is defined
+    - primary_stopped.rc != 0
+  run_once: true

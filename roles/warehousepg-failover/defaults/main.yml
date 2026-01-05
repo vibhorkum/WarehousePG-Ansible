@@ -1,0 +1,31 @@
+---
+# Default variables for WarehousePG Failover Role
+
+# Failover mode: 'planned' or 'unplanned'
+# planned: Graceful failover with data sync verification
+# unplanned: Emergency failover when primary is unavailable
+whpg_failover_mode: planned
+
+# Pre-failover checks
+whpg_failover_verify_replication_lag: true
+whpg_failover_max_lag_mb: 10
+whpg_failover_verify_connectivity: true
+
+# Post-failover actions
+whpg_failover_update_dns: false
+whpg_failover_notify_applications: false
+
+# Coordinator configuration
+whpg_coordinator_port: 5432
+whpg_coordinator_data_directory: /data/coordinator/gpseg-1
+
+# Base directory
+whpg_base_dir: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
+
+# Timeout settings (seconds)
+whpg_failover_timeout: 300
+whpg_startup_timeout: 120
+
+# Safety settings
+whpg_failover_force: false
+whpg_failover_skip_checks: false

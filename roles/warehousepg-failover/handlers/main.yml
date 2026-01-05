@@ -1,0 +1,16 @@
+---
+# Handlers for WarehousePG Failover Role
+
+- name: Wait for cluster stabilization
+  pause:
+    seconds: 30
+  listen: "cluster state changed"
+
+- name: Trigger FTS probe
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstate -e
+  listen: "refresh cluster state"

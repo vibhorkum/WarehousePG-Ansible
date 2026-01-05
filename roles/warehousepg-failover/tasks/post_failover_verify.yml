@@ -1,0 +1,122 @@
+---
+# Post-failover verification
+
+- name: Get DR coordinator for verification
+  set_fact:
+    dr_coordinator_host: "{{ groups['whpg_dr_coordinator'][0] }}"
+  run_once: true
+
+- name: Verify new primary coordinator is responding
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    psql -d template1 -c "SELECT version();"
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: version_check
+  changed_when: false
+  run_once: true
+
+- name: Display database version
+  debug:
+    msg: "Database is responding: {{ version_check.stdout_lines | last }}"
+  run_once: true
+
+- name: Check cluster state
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstate -s
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: cluster_state
+  changed_when: false
+  run_once: true
+
+- name: Display cluster state
+  debug:
+    var: cluster_state.stdout_lines
+  run_once: true
+
+- name: Check for any down segments
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstate -e
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: segment_health
+  changed_when: false
+  run_once: true
+
+- name: Verify all segments are running
+  assert:
+    that:
+      - "'All segments are running normally' in segment_health.stdout or segment_health.rc == 0"
+    fail_msg: "WARNING: Some segments may not be running. Check gpstate -e for details."
+    success_msg: "All segments are running normally."
+  when: not whpg_failover_force
+  run_once: true
+  ignore_errors: yes
+
+- name: Get final segment configuration
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    psql -d template1 -c "
+      SELECT content, role, preferred_role, status, hostname, address, port
+      FROM gp_segment_configuration
+      ORDER BY content, role;
+    "
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: final_config
+  changed_when: false
+  run_once: true
+
+- name: Display final segment configuration
+  debug:
+    var: final_config.stdout_lines
+  run_once: true
+
+- name: Test database write capability
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    psql -d template1 -c "
+      CREATE TEMP TABLE failover_test (id int);
+      INSERT INTO failover_test VALUES (1);
+      SELECT * FROM failover_test;
+      DROP TABLE failover_test;
+    "
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: write_test
+  changed_when: false
+  run_once: true
+
+- name: Verify write capability
+  debug:
+    msg: "Database write test: {{ 'PASSED' if write_test.rc == 0 else 'FAILED' }}"
+  run_once: true
+
+- name: Generate failover report
+  debug:
+    msg:
+      - "========================================="
+      - "Failover Verification Report"
+      - "========================================="
+      - "New Primary Coordinator: {{ dr_coordinator_host }}"
+      - "Coordinator Port: {{ whpg_coordinator_port }}"
+      - "Database Version: {{ version_check.stdout_lines | last | default('Unknown') }}"
+      - "Write Test: {{ 'PASSED' if write_test.rc == 0 else 'FAILED' }}"
+      - "Cluster Health: {{ 'HEALTHY' if 'All segments are running normally' in segment_health.stdout else 'CHECK REQUIRED' }}"
+      - ""
+      - "Connection String:"
+      - "  postgresql://gpadmin@{{ hostvars[dr_coordinator_host].ansible_host }}:{{ whpg_coordinator_port }}/template1"
+  run_once: true

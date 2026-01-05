@@ -1,0 +1,107 @@
+---
+# WarehousePG Failover Playbook
+#
+# This playbook performs failover from primary site to DR site.
+#
+# Usage:
+#   Planned failover (default):
+#     ansible-playbook -i test_inventory.yml failover.yml
+#
+#   Unplanned/Emergency failover (primary unavailable):
+#     ansible-playbook -i test_inventory.yml failover.yml -e "whpg_failover_mode=unplanned"
+#
+#   Force failover (skip safety checks):
+#     ansible-playbook -i test_inventory.yml failover.yml -e "whpg_failover_force=true"
+#
+#   Dry run (check mode):
+#     ansible-playbook -i test_inventory.yml failover.yml --check
+#
+# Prerequisites:
+#   - DR site configured with standby coordinator and segment mirrors
+#   - Replication must be in sync (for planned failover)
+#   - SSH connectivity to all hosts
+
+- name: WarehousePG Failover from Primary to DR Site
+  hosts: whpg_dr_coordinator
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    # Failover mode: 'planned' or 'unplanned'
+    # - planned: Graceful failover with sync verification and primary shutdown
+    # - unplanned: Emergency failover when primary is unavailable
+    whpg_failover_mode: planned
+    
+    # Safety settings
+    whpg_failover_force: false          # Set to true to skip safety assertions
+    whpg_failover_skip_checks: false    # Set to true to skip all pre-checks
+    
+    # Replication lag threshold (MB)
+    whpg_failover_max_lag_mb: 10
+    
+    # Cluster configuration
+    whpg_base_dir: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
+    whpg_coordinator_data_directory: /data/coordinator/gpseg-1
+    whpg_coordinator_port: 5432
+    
+    # Timeout settings
+    whpg_failover_timeout: 300
+    whpg_startup_timeout: 120
+  
+  pre_tasks:
+    - name: Validate required inventory groups
+      assert:
+        that:
+          - groups['whpg_dr_coordinator'] is defined
+          - groups['whpg_dr_coordinator'] | length > 0
+        fail_msg: "DR coordinator group (whpg_dr_coordinator) is not defined or empty"
+      run_once: true
+      tags: always
+    
+    - name: Display failover warning
+      debug:
+        msg:
+          - "╔══════════════════════════════════════════════════════════════╗"
+          - "║              WARNING: FAILOVER OPERATION                     ║"
+          - "╠══════════════════════════════════════════════════════════════╣"
+          - "║ This will promote the DR site to PRIMARY.                   ║"
+          - "║                                                              ║"
+          - "║ Mode: {{ whpg_failover_mode | upper }}                                           ║"
+          - "║ Force: {{ whpg_failover_force }}                                            ║"
+          - "║                                                              ║"
+          - "║ After failover:                                              ║"
+          - "║ - Old primary site will be OFFLINE                          ║"
+          - "║ - Applications must connect to DR site                      ║"
+          - "║ - Manual intervention required for failback                 ║"
+          - "╚══════════════════════════════════════════════════════════════╝"
+      run_once: true
+      tags: always
+    
+    - name: Pause for confirmation (interactive mode)
+      pause:
+        prompt: "Press Enter to continue with failover or Ctrl+C to abort"
+      when: 
+        - not (whpg_failover_force | default(false))
+        - ansible_check_mode is not defined or not ansible_check_mode
+      run_once: true
+      tags: always
+  
+  roles:
+    - role: warehousepg-failover
+      tags: [failover]
+  
+  post_tasks:
+    - name: Display connection information
+      debug:
+        msg:
+          - "╔══════════════════════════════════════════════════════════════╗"
+          - "║              FAILOVER COMPLETE                               ║"
+          - "╠══════════════════════════════════════════════════════════════╣"
+          - "║ New Primary Coordinator:                                     ║"
+          - "║   Host: {{ hostvars[groups['whpg_dr_coordinator'][0]].ansible_host | default('N/A') }}"
+          - "║   Port: {{ whpg_coordinator_port }}"
+          - "║                                                              ║"
+          - "║ Update your applications to connect to the new primary.     ║"
+          - "╚══════════════════════════════════════════════════════════════╝"
+      run_once: true
+      tags: always

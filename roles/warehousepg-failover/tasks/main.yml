@@ -1,0 +1,65 @@
+---
+# Main tasks for WarehousePG Failover Role
+#
+# This role performs failover from primary site to DR site:
+# 1. Pre-flight checks (connectivity, replication lag, etc.)
+# 2. Stop primary coordinator (if accessible in planned failover)
+# 3. Promote standby coordinator to primary
+# 4. Activate segment mirrors as new primaries
+# 5. Verify new cluster state
+# 6. Post-failover tasks
+
+- name: Display failover information
+  debug:
+    msg:
+      - "========================================="
+      - "WarehousePG Failover Operation"
+      - "========================================="
+      - "Failover Mode: {{ whpg_failover_mode }}"
+      - "Target DR Coordinator: {{ groups['whpg_dr_coordinator'][0] }}"
+      - "Force Mode: {{ whpg_failover_force }}"
+      - "Skip Checks: {{ whpg_failover_skip_checks }}"
+  run_once: true
+  tags: [failover, info]
+
+- name: Run pre-failover checks
+  include_tasks: pre_failover_checks.yml
+  when: not whpg_failover_skip_checks
+  tags: [failover, checks]
+
+- name: Stop primary site (planned failover)
+  include_tasks: stop_primary.yml
+  when: whpg_failover_mode == 'planned'
+  tags: [failover, stop]
+
+- name: Promote standby coordinator
+  include_tasks: promote_standby.yml
+  tags: [failover, promote]
+
+- name: Activate segment mirrors
+  include_tasks: activate_mirrors.yml
+  tags: [failover, mirrors]
+
+- name: Run post-failover verification
+  include_tasks: post_failover_verify.yml
+  tags: [failover, verify]
+
+- name: Display failover completion summary
+  debug:
+    msg:
+      - "========================================="
+      - "WarehousePG Failover Complete"
+      - "========================================="
+      - "New Primary Coordinator: {{ groups['whpg_dr_coordinator'][0] }}"
+      - "Failover Mode: {{ whpg_failover_mode }}"
+      - ""
+      - "IMPORTANT: Update your application connection strings to point to:"
+      - "  Host: {{ hostvars[groups['whpg_dr_coordinator'][0]].ansible_host }}"
+      - "  Port: {{ whpg_coordinator_port }}"
+      - ""
+      - "Next Steps:"
+      - "  1. Verify application connectivity"
+      - "  2. Monitor cluster health: gpstate -e"
+      - "  3. Plan failback or rebuild of old primary site"
+  run_once: true
+  tags: [failover, summary]

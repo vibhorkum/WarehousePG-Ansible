@@ -1,0 +1,149 @@
+---
+# Pre-failover checks
+
+- name: Verify DR coordinator is accessible
+  wait_for:
+    host: "{{ hostvars[groups['whpg_dr_coordinator'][0]].ansible_host }}"
+    port: 22
+    timeout: 30
+  delegate_to: localhost
+  run_once: true
+
+- name: Verify DR segments are accessible
+  wait_for:
+    host: "{{ hostvars[item].ansible_host }}"
+    port: 22
+    timeout: 30
+  delegate_to: localhost
+  loop: "{{ groups['whpg_dr_segments'] }}"
+  run_once: true
+
+- name: Check if primary coordinator is accessible (for planned failover)
+  wait_for:
+    host: "{{ hostvars[groups['whpg_primary_coordinator'][0]].ansible_host }}"
+    port: 22
+    timeout: 10
+  delegate_to: localhost
+  register: primary_accessible
+  ignore_errors: yes
+  run_once: true
+  when: whpg_failover_mode == 'planned'
+
+- name: Set primary accessibility fact
+  set_fact:
+    primary_is_accessible: "{{ primary_accessible is succeeded if whpg_failover_mode == 'planned' else false }}"
+  run_once: true
+
+- name: Warn if primary is not accessible in planned failover
+  debug:
+    msg: 
+      - "WARNING: Primary coordinator is not accessible!"
+      - "Proceeding with failover without graceful shutdown of primary."
+      - "This may result in data loss if replication was not in sync."
+  when:
+    - whpg_failover_mode == 'planned'
+    - not primary_is_accessible
+  run_once: true
+
+- name: Check standby coordinator status (if primary accessible)
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstate -f
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: standby_status
+  changed_when: false
+  when: primary_is_accessible
+  run_once: true
+  ignore_errors: yes
+
+- name: Verify standby is in streaming mode
+  assert:
+    that:
+      - "'streaming' in standby_status.stdout.lower()"
+    fail_msg: "Standby coordinator is not in streaming mode. Replication may be broken."
+    success_msg: "Standby coordinator is in streaming mode."
+  when:
+    - primary_is_accessible
+    - standby_status is succeeded
+    - not whpg_failover_force
+  run_once: true
+
+- name: Check replication lag (if primary accessible)
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    psql -d template1 -t -c "
+      SELECT pg_wal_lsn_diff(sent_lsn, replay_lsn) as lag_bytes
+      FROM pg_stat_replication
+      WHERE application_name = 'gp_walreceiver'
+      LIMIT 1;
+    "
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: replication_lag
+  changed_when: false
+  when: 
+    - primary_is_accessible
+    - whpg_failover_verify_replication_lag
+  run_once: true
+  ignore_errors: yes
+
+- name: Verify replication lag is acceptable
+  assert:
+    that:
+      - (replication_lag.stdout | trim | int) < (whpg_failover_max_lag_mb * 1024 * 1024)
+    fail_msg: "Replication lag ({{ replication_lag.stdout | trim | int }} bytes) exceeds maximum allowed ({{ whpg_failover_max_lag_mb }} MB)"
+    success_msg: "Replication lag is within acceptable limits."
+  when:
+    - primary_is_accessible
+    - whpg_failover_verify_replication_lag
+    - replication_lag is succeeded
+    - replication_lag.stdout | trim | length > 0
+    - not whpg_failover_force
+  run_once: true
+
+- name: Check mirror segment status (if primary accessible)
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstate -m
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: mirror_status
+  changed_when: false
+  when: primary_is_accessible
+  run_once: true
+  ignore_errors: yes
+
+- name: Display mirror status
+  debug:
+    var: mirror_status.stdout_lines
+  when: 
+    - primary_is_accessible
+    - mirror_status is succeeded
+  run_once: true
+
+- name: Verify all mirrors are synchronized
+  assert:
+    that:
+      - "'Not Syncing' not in mirror_status.stdout"
+    fail_msg: "Some mirrors are not synchronized. Failover may result in data loss."
+    success_msg: "All mirrors are synchronized."
+  when:
+    - primary_is_accessible
+    - mirror_status is succeeded
+    - not whpg_failover_force
+  run_once: true
+
+- name: Display pre-flight check summary
+  debug:
+    msg:
+      - "Pre-failover checks completed successfully"
+      - "Primary accessible: {{ primary_is_accessible }}"
+      - "Ready to proceed with failover"
+  run_once: true
