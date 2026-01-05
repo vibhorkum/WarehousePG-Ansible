@@ -8,7 +8,8 @@ whpg_dr_enable_standby_coordinator: true
 whpg_dr_enable_segment_mirrors: true
 
 # Standby coordinator configuration
-whpg_standby_coordinator_port: "{{ whpg_standby_port | default(5433) }}"
+# Use same port as primary (5432) - standby runs on different host
+whpg_standby_coordinator_port: "{{ whpg_coordinator_port | default(5432) }}"
 whpg_standby_data_directory: "{{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}"
 
 # Mirror configuration

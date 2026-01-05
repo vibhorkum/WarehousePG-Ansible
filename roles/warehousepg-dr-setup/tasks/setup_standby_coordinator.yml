@@ -38,7 +38,6 @@
     source {{ whpg_base_dir }}/greenplum_path.sh
     export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}
     gpinitstandby -s {{ dr_coordinator_repl_alias }} \
-      -P {{ whpg_standby_coordinator_port }} \
       -S {{ whpg_standby_data_directory }} \
       -a
   delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"

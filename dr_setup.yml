@@ -50,7 +50,8 @@
     whpg_mirror_data_directories:
       - /data/mirror/seg1
       - /data/mirror/seg2
-    whpg_coordinator_data_directory: /data/coordinator
+    # Coordinator storage - used by storage role
+    whpg_coordinator_storage: /data/coordinator
     # Force creation on DR site (fresh install)
     whpg_force_create: true
     # Enable directory creation flags
