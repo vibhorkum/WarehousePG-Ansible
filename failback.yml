@@ -90,11 +90,96 @@
       failed_when: false
       tags: [checks]
 
+    - name: Check if DR coordinator data directory exists
+      become_user: gpadmin
+      stat:
+        path: "{{ whpg_coordinator_data_directory }}/postgresql.conf"
+      register: dr_data_exists
+      tags: [checks]
+
+    - name: Check if DR is still in standby mode
+      become_user: gpadmin
+      stat:
+        path: "{{ whpg_coordinator_data_directory }}/standby.signal"
+      register: dr_standby_signal
+      tags: [checks]
+
+    - name: Display DR site diagnostic information
+      debug:
+        msg:
+          - "DR Site Status:"
+          - "  - Data directory exists: {{ dr_data_exists.stat.exists | default(false) }}"
+          - "  - Standby signal present: {{ dr_standby_signal.stat.exists | default(false) }}"
+          - "  - Database responding: {{ dr_running.rc == 0 }}"
+          - ""
+          - "{% if dr_standby_signal.stat.exists | default(false) %}ISSUE: DR is still in STANDBY mode. You need to run FAILOVER first!{% endif %}"
+          - "{% if not dr_data_exists.stat.exists | default(false) %}ISSUE: DR data directory not found. DR setup may not be complete.{% endif %}"
+      when: dr_running.rc != 0
+      tags: [checks]
+
+    - name: Fail if DR is still in standby mode
+      fail:
+        msg: |
+          DR site is still in STANDBY mode (standby.signal exists).
+          
+          You need to run FAILOVER first before FAILBACK:
+            ansible-playbook -i inventory.yml failover.yml
+          
+          Failback is only used to return from DR site BACK to primary site
+          AFTER a failover has already been performed.
+      when: 
+        - dr_standby_signal.stat.exists | default(false)
+        - not (whpg_failback_force | default(false))
+      tags: [checks]
+
+    - name: Attempt to start DR cluster if not running
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        echo "Attempting to start DR cluster..."
+        gpstart -a
+      register: dr_start_attempt
+      when: 
+        - dr_running.rc != 0
+        - dr_data_exists.stat.exists | default(false)
+        - not (dr_standby_signal.stat.exists | default(false))
+        - whpg_failback_force | default(false)
+      failed_when: false
+      tags: [checks]
+
+    - name: Re-check DR site after start attempt
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        psql -d template1 -t -c "SELECT 1;"
+      register: dr_running_retry
+      when: dr_start_attempt is changed
+      changed_when: false
+      failed_when: false
+      tags: [checks]
+
+    - name: Update DR running status
+      set_fact:
+        dr_running: "{{ dr_running_retry }}"
+      when: dr_running_retry is defined and dr_running_retry.rc is defined
+      tags: [checks]
+
     - name: Verify DR site is operational
       assert:
         that:
           - dr_running.rc == 0
-        fail_msg: "DR site is not running. Please ensure the DR cluster is operational before failback."
+        fail_msg: |
+          DR site is not running. Cannot proceed with failback.
+          
+          Possible causes:
+          1. Failover was never performed (DR is still standby) - run failover.yml first
+          2. DR cluster crashed and needs manual recovery
+          3. DR data directory is missing or corrupted
+          
+          To force failback anyway (skip this check):
+            ansible-playbook -i inventory.yml failback.yml -e "whpg_failback_force=true"
         success_msg: "DR site is operational as current primary."
       when: not (whpg_failback_force | default(false))
       tags: [checks]
