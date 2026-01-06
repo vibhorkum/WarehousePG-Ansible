@@ -35,16 +35,21 @@
   debug:
     var: mirror_config_content.stdout_lines
 
-- name: Check if mirrors already exist
+- name: Check if segment mirrors already exist
   become: yes
   become_user: gpadmin
   shell: |
     source {{ whpg_base_dir }}/greenplum_path.sh
     export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}
-    psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE role='m';"
+    # Exclude coordinator standby (content=-1) - only count segment mirrors
+    psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE role='m' AND content >= 0;"
   delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
   register: mirror_count
   changed_when: false
+
+- name: Debug mirror count
+  debug:
+    msg: "Segment mirror count: {{ mirror_count.stdout | trim }} (excluding standby coordinator)"
 
 - name: Add segment mirrors
   become: yes

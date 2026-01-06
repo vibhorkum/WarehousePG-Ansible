@@ -29,3 +29,7 @@ whpg_startup_timeout: 120
 # Safety settings
 whpg_failover_force: false
 whpg_failover_skip_checks: false
+
+# DR Site takeover - when true, stops primary site segments to force DR mirrors to become primaries
+# This ensures all data processing happens on the DR site after failover
+whpg_failover_dr_takeover: true

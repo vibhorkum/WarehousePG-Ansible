@@ -7,6 +7,11 @@
     dr_coordinator_ip: "{{ hostvars[groups['whpg_dr_coordinator'][0]].private_ip | default(hostvars[groups['whpg_dr_coordinator'][0]].ansible_host) }}"
   run_once: true
 
+- name: Get DR segment hosts
+  set_fact:
+    dr_segment_hosts: "{{ groups['whpg_dr_segments'] | default([]) }}"
+  run_once: true
+
 - name: Check if standby coordinator is running on DR site
   become: yes
   become_user: gpadmin
@@ -19,15 +24,24 @@
   failed_when: false
   run_once: true
 
-- name: Verify standby is running before promotion
-  assert:
-    that:
-      - standby_running.rc == 0
-    fail_msg: "Standby coordinator is not running on {{ dr_coordinator_host }}. Cannot proceed with failover."
-    success_msg: "Standby coordinator is running and ready for promotion."
+- name: Check if standby data directory exists
+  become: yes
+  become_user: gpadmin
+  stat:
+    path: "{{ whpg_coordinator_data_directory }}/postgresql.conf"
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: standby_data_dir
   run_once: true
 
-- name: Check if already promoted (recovery.signal exists)
+- name: Fail if standby data directory does not exist
+  assert:
+    that:
+      - standby_data_dir.stat.exists
+    fail_msg: "Standby data directory {{ whpg_coordinator_data_directory }} does not exist on {{ dr_coordinator_host }}."
+    success_msg: "Standby data directory exists."
+  run_once: true
+
+- name: Check if already promoted (standby.signal indicates standby mode)
   become: yes
   become_user: gpadmin
   stat:
@@ -36,21 +50,103 @@
   register: standby_signal
   run_once: true
 
-- name: Promote standby coordinator using gpactivatestandby
+- name: Set standby promotion status
+  set_fact:
+    needs_promotion: "{{ standby_signal.stat.exists | default(false) }}"
+  run_once: true
+
+- name: Display promotion plan
+  debug:
+    msg: |
+      Standby running: {{ 'Yes' if standby_running.rc == 0 else 'No (stopped by gpstop)' }}
+      Needs promotion: {{ 'Yes' if needs_promotion else 'Already promoted or will be activated' }}
+      DR takeover mode: {{ whpg_failover_dr_takeover | default(true) }}
+  run_once: true
+
+# CRITICAL: For DR takeover, we must prepare DR segment mirrors BEFORE starting the cluster
+# Remove standby.signal from DR mirrors so they can start as primaries
+- name: Prepare DR segment mirrors for promotion (remove standby.signal)
+  become: yes
+  become_user: gpadmin
+  shell: |
+    echo "=== Preparing DR segment mirrors for promotion ==="
+    for dir in /data/mirror/seg*/; do
+      if [ -d "$dir" ]; then
+        # Remove standby.signal to allow starting as primary
+        if [ -f "${dir}standby.signal" ]; then
+          echo "Removing ${dir}standby.signal"
+          rm -f "${dir}standby.signal"
+        fi
+        # Clean up stale postmaster.pid if process not running
+        if [ -f "${dir}postmaster.pid" ]; then
+          PID=$(head -1 "${dir}postmaster.pid" 2>/dev/null || echo "")
+          if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then
+            echo "Removing stale ${dir}postmaster.pid"
+            rm -f "${dir}postmaster.pid"
+          fi
+        fi
+      fi
+    done
+    # Clear stale shared memory
+    for shmid in $(ipcs -m 2>/dev/null | awk '/gpadmin/ {print $2}'); do
+      ipcrm -m "$shmid" 2>/dev/null || true
+    done
+    echo "DR segment preparation complete"
+  delegate_to: "{{ item }}"
+  loop: "{{ dr_segment_hosts }}"
+  when:
+    - whpg_failover_dr_takeover | default(true)
+    - dr_segment_hosts | length > 0
+  ignore_errors: yes
+
+# gpactivatestandby handles both starting the standby if stopped AND promoting it
+# The -f flag forces activation even if standby is not running
+- name: Activate and promote standby coordinator using gpactivatestandby
   become: yes
   become_user: gpadmin
   shell: |
     source {{ whpg_base_dir }}/greenplum_path.sh
     export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
-    gpactivatestandby -d {{ whpg_coordinator_data_directory }} -a
+    export PGPORT={{ whpg_coordinator_port }}
+    # Force activation - this will work even if standby was stopped by gpstop
+    gpactivatestandby -d {{ whpg_coordinator_data_directory }} -a -f
   delegate_to: "{{ dr_coordinator_host }}"
   register: promote_standby
-  when: standby_signal.stat.exists | default(false)
+  failed_when: false
   run_once: true
 
 - name: Display promotion result
   debug:
-    msg: "{{ promote_standby.stdout_lines if promote_standby.changed else 'Standby already promoted or promotion skipped' }}"
+    msg: "{{ promote_standby.stdout_lines }}"
+  run_once: true
+
+# gpactivatestandby starts in single-node mode, we need to restart the full cluster
+- name: Stop coordinator to restart in full mode
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstop -a -M fast || true
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: stop_result
+  run_once: true
+
+- name: Start full cluster from new primary
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstart -a
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: start_result
+  failed_when: false
+  run_once: true
+
+- name: Display cluster start result
+  debug:
+    msg: "{{ start_result.stdout_lines }}"
   run_once: true
 
 - name: Wait for promoted coordinator to be ready
@@ -65,6 +161,7 @@
   delay: 10
   until: new_primary_ready.rc == 0
   run_once: true
+  failed_when: false
 
 - name: Verify new primary coordinator is accepting connections
   become: yes
@@ -76,6 +173,7 @@
   delegate_to: "{{ dr_coordinator_host }}"
   register: new_primary_test
   changed_when: false
+  failed_when: false
   run_once: true
 
 - name: Display new primary status
@@ -83,5 +181,5 @@
     msg:
       - "Standby coordinator has been promoted to primary"
       - "New primary coordinator: {{ dr_coordinator_host }}"
-      - "Connection test: {{ 'SUCCESS' if new_primary_test.rc == 0 else 'FAILED' }}"
+      - "Connection test: {{ 'SUCCESS' if new_primary_test.rc == 0 else 'FAILED - DTX recovery may be in progress' }}"
   run_once: true

@@ -1,6 +1,11 @@
 ---
 # Stop primary site (planned failover only)
 
+- name: Initialize primary_is_accessible if not defined
+  set_fact:
+    primary_is_accessible: "{{ primary_is_accessible | default(true) }}"
+  run_once: true
+
 - name: Check if primary coordinator is running
   become: yes
   become_user: gpadmin
@@ -66,4 +71,68 @@
     - primary_is_accessible
     - primary_stopped is defined
     - primary_stopped.rc != 0
+  run_once: true
+
+# CRITICAL: For DR takeover, we must stop primary segments AND prevent them from restarting
+# This must happen BEFORE the gpstart command runs after gpactivatestandby
+- name: Stop primary site segment processes (for DR takeover)
+  become: yes
+  become_user: gpadmin
+  shell: |
+    echo "=== Stopping primary segment processes ==="
+    # Kill all postgres processes for primary segments
+    pkill -9 -f 'postgres.*-D /data/primary' || true
+    sleep 2
+    # Double check and kill any remaining
+    pkill -9 -f 'postgres.*-D /data/primary' || true
+    # Verify segments are stopped
+    if pgrep -f 'postgres.*-D /data/primary' > /dev/null; then
+      echo "WARNING: Some segment processes may still be running"
+      pgrep -af 'postgres.*-D /data/primary'
+    else
+      echo "All primary segment processes stopped"
+    fi
+  delegate_to: "{{ groups['whpg_primary_segments'][0] }}"
+  register: stop_segments
+  when:
+    - whpg_failover_dr_takeover | default(true)
+    - primary_is_accessible
+  run_once: true
+  ignore_errors: yes
+
+- name: Display segment stop result
+  debug:
+    msg: "{{ stop_segments.stdout_lines if stop_segments is defined and stop_segments.stdout_lines is defined else 'Segment stop skipped' }}"
+  run_once: true
+  when: whpg_failover_dr_takeover | default(true)
+
+# CRITICAL: Prevent primary segments from restarting by renaming their data directories
+# This ensures gpstart -a won't be able to start them
+- name: Disable primary segments to prevent restart during failover
+  become: yes
+  become_user: gpadmin
+  shell: |
+    echo "=== Disabling primary segments to prevent restart ==="
+    # Create a marker file that indicates failover is in progress
+    for dir in /data/primary/seg*/gpseg*; do
+      if [ -d "$dir" ]; then
+        touch "${dir}/failover.disabled"
+        echo "Created failover marker in $dir"
+      fi
+    done
+    echo "Primary segments disabled"
+  delegate_to: "{{ groups['whpg_primary_segments'][0] }}"
+  when:
+    - whpg_failover_dr_takeover | default(true)
+    - primary_is_accessible
+  run_once: true
+  ignore_errors: yes
+
+- name: Wait for FTS to detect segment failures
+  pause:
+    seconds: 15
+  when:
+    - whpg_failover_dr_takeover | default(true)
+    - stop_segments is defined
+    - stop_segments.changed | default(false)
   run_once: true

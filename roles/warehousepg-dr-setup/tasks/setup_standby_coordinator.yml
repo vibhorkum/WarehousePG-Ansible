@@ -26,10 +26,20 @@
   shell: |
     source {{ whpg_base_dir }}/greenplum_path.sh
     export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}
-    gpstate -f | grep -i standby || true
+    gpstate -f 2>&1
   delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
   register: standby_check
   changed_when: false
+
+- name: Set standby configured fact
+  set_fact:
+    standby_already_configured: "{{ 'not configured' not in standby_check.stdout.lower() and 'standby address' in standby_check.stdout.lower() }}"
+  run_once: true
+
+- name: Display standby check result
+  debug:
+    msg: "Standby already configured: {{ standby_already_configured }}"
+  run_once: true
 
 - name: Initialize standby coordinator using replication alias
   become: yes
@@ -42,7 +52,7 @@
       -a
   delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
   register: standby_init
-  when: "'standby' not in standby_check.stdout.lower()"
+  when: not standby_already_configured
   failed_when:
     - standby_init.rc != 0
     - "'already configured' not in standby_init.stderr"
