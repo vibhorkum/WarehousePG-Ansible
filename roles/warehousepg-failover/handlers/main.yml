@@ -13,4 +13,5 @@
     source {{ whpg_base_dir }}/greenplum_path.sh
     export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
     gpstate -e
+  failed_when: false
   listen: "refresh cluster state"

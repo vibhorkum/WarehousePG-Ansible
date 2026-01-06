@@ -50,6 +50,7 @@
   delegate_to: "{{ dr_coordinator_host }}"
   register: segment_health
   changed_when: false
+  failed_when: false
   run_once: true
 
 - name: Verify all segments are running
