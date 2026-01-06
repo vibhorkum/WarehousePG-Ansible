@@ -1,0 +1,355 @@
+---
+# WarehousePG Failback Playbook
+#
+# This playbook performs failback from DR site back to primary site.
+# Use this after a failover event when the primary site is recovered and ready.
+#
+# Usage:
+#   # Standard failback (rebuilds primary as new standby, then switches)
+#   ansible-playbook -i inventory.yml failback.yml
+#
+#   # Force failback (skip safety checks)
+#   ansible-playbook -i inventory.yml failback.yml -e "whpg_failback_force=true"
+#
+#   # Skip primary rebuild (if primary is already in sync)
+#   ansible-playbook -i inventory.yml failback.yml -e "whpg_failback_skip_rebuild=true"
+#
+# Prerequisites:
+#   - Successful failover was performed (DR site is currently primary)
+#   - Primary site is recovered and accessible
+#   - Network connectivity between sites is restored
+
+# Phase 1: Pre-failback checks
+- name: WarehousePG Failback - Pre-checks
+  hosts: whpg_primary_coordinator
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    whpg_failback_force: false
+    whpg_failback_skip_checks: false
+  
+  tasks:
+    - name: Display failback warning
+      debug:
+        msg:
+          - "╔══════════════════════════════════════════════════════════════╗"
+          - "║              WARNING: FAILBACK OPERATION                     ║"
+          - "╠══════════════════════════════════════════════════════════════╣"
+          - "║ This will restore the PRIMARY site as the active cluster.   ║"
+          - "║                                                              ║"
+          - "║ Current Primary: DR Site                                     ║"
+          - "║ Target Primary:  Original Primary Site                       ║"
+          - "║                                                              ║"
+          - "║ This operation will:                                         ║"
+          - "║ 1. Rebuild old primary as standby from current DR primary    ║"
+          - "║ 2. Sync data from DR to rebuilt primary                      ║"
+          - "║ 3. Promote rebuilt primary back to primary role              ║"
+          - "║ 4. Demote DR site back to standby role                       ║"
+          - "╚══════════════════════════════════════════════════════════════╝"
+      tags: always
+
+    - name: Pause for confirmation
+      pause:
+        prompt: "Press Enter to continue with failback or Ctrl+C to abort"
+      when: not (whpg_failback_force | default(false))
+      tags: always
+
+    - name: Check primary site accessibility
+      ping:
+      register: primary_ping
+      tags: [checks]
+
+    - name: Verify primary site is accessible
+      assert:
+        that:
+          - primary_ping is succeeded
+        fail_msg: "Primary site is not accessible. Cannot proceed with failback."
+        success_msg: "Primary site is accessible."
+      tags: [checks]
+
+# Phase 2: Check current DR site status
+- name: WarehousePG Failback - Verify DR Site Status
+  hosts: whpg_dr_coordinator
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    whpg_base_dir: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
+    whpg_coordinator_data_directory: /data/coordinator/gpseg-1
+  
+  tasks:
+    - name: Check if DR site is running as primary
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        psql -d template1 -t -c "SELECT 1;"
+      register: dr_running
+      changed_when: false
+      failed_when: false
+      tags: [checks]
+
+    - name: Verify DR site is operational
+      assert:
+        that:
+          - dr_running.rc == 0
+        fail_msg: "DR site is not running. Please ensure the DR cluster is operational before failback."
+        success_msg: "DR site is operational as current primary."
+      when: not (whpg_failback_force | default(false))
+      tags: [checks]
+
+    - name: Get current cluster status
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        gpstate -s
+      register: cluster_status
+      changed_when: false
+      failed_when: false
+      tags: [checks]
+
+    - name: Display current cluster status
+      debug:
+        msg: "{{ cluster_status.stdout_lines }}"
+      tags: [checks]
+
+# Phase 3: Stop cluster on DR site
+- name: WarehousePG Failback - Stop DR Cluster
+  hosts: whpg_dr_coordinator
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    whpg_base_dir: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
+    whpg_coordinator_data_directory: /data/coordinator/gpseg-1
+  
+  tasks:
+    - name: Stop DR cluster gracefully
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        gpstop -a -M fast
+      register: stop_dr
+      failed_when: false
+      tags: [failback]
+
+    - name: Display stop result
+      debug:
+        msg: "{{ stop_dr.stdout_lines if stop_dr.stdout_lines is defined else 'Cluster stop attempted' }}"
+      tags: [failback]
+
+# Phase 4: Rebuild primary site from DR site
+- name: WarehousePG Failback - Rebuild Primary Site
+  hosts: whpg_primary_coordinator
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    whpg_base_dir: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
+    whpg_coordinator_data_directory: /data/coordinator/gpseg-1
+    whpg_failback_skip_rebuild: false
+  
+  tasks:
+    - name: Skip rebuild if requested
+      debug:
+        msg: "Skipping primary rebuild as requested"
+      when: whpg_failback_skip_rebuild | default(false)
+      tags: [failback]
+
+    - name: Clean up old primary coordinator data
+      become_user: gpadmin
+      shell: |
+        # Stop any running postgres processes
+        pkill -9 -u gpadmin postgres || true
+        # Remove old data directory
+        rm -rf {{ whpg_coordinator_data_directory }}
+      when: not (whpg_failback_skip_rebuild | default(false))
+      tags: [failback]
+
+    - name: Rebuild primary coordinator from DR using pg_basebackup
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        
+        # Get DR coordinator hostname
+        DR_COORD="{{ groups['whpg_dr_coordinator'][0] }}"
+        DR_HOST="{{ hostvars[groups['whpg_dr_coordinator'][0]].private_ip | default(hostvars[groups['whpg_dr_coordinator'][0]].ansible_host) }}"
+        
+        echo "Rebuilding from DR coordinator: $DR_HOST"
+        
+        # Create base backup from DR site
+        pg_basebackup -h $DR_HOST -p 5432 -D {{ whpg_coordinator_data_directory }} \
+          -X stream -R -P -v -c fast
+      register: rebuild_primary
+      when: not (whpg_failback_skip_rebuild | default(false))
+      tags: [failback]
+
+    - name: Display rebuild result
+      debug:
+        msg: "{{ rebuild_primary.stdout_lines if rebuild_primary.stdout_lines is defined else 'Rebuild skipped' }}"
+      when: rebuild_primary is defined
+      tags: [failback]
+
+# Phase 5: Start primary and promote
+- name: WarehousePG Failback - Promote Primary Site
+  hosts: whpg_primary_coordinator
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    whpg_base_dir: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
+    whpg_coordinator_data_directory: /data/coordinator/gpseg-1
+  
+  tasks:
+    - name: Remove standby.signal to allow primary mode
+      become_user: gpadmin
+      file:
+        path: "{{ whpg_coordinator_data_directory }}/standby.signal"
+        state: absent
+      tags: [failback]
+
+    - name: Start primary cluster
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        gpstart -a
+      register: start_primary
+      failed_when: false
+      tags: [failback]
+
+    - name: Display start result
+      debug:
+        msg: "{{ start_primary.stdout_lines }}"
+      tags: [failback]
+
+# Phase 6: Reconfigure DR site as standby
+- name: WarehousePG Failback - Configure DR as Standby
+  hosts: whpg_dr_coordinator
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    whpg_base_dir: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
+    whpg_coordinator_data_directory: /data/coordinator/gpseg-1
+  
+  tasks:
+    - name: Clean up DR coordinator data
+      become_user: gpadmin
+      shell: |
+        # Stop any running postgres processes
+        pkill -9 -u gpadmin postgres || true
+        # Remove old data directory
+        rm -rf {{ whpg_coordinator_data_directory }}
+      tags: [failback]
+
+    - name: Rebuild DR as standby from primary
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        
+        PRIMARY_HOST="{{ hostvars[groups['whpg_primary_coordinator'][0]].private_ip | default(hostvars[groups['whpg_primary_coordinator'][0]].ansible_host) }}"
+        
+        echo "Rebuilding DR standby from primary: $PRIMARY_HOST"
+        
+        pg_basebackup -h $PRIMARY_HOST -p 5432 -D {{ whpg_coordinator_data_directory }} \
+          -X stream -R -P -v -c fast
+      register: rebuild_dr
+      tags: [failback]
+
+    - name: Start DR as standby
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        pg_ctl -D {{ whpg_coordinator_data_directory }} start -l {{ whpg_coordinator_data_directory }}/log/startup.log
+      register: start_dr_standby
+      failed_when: false
+      tags: [failback]
+
+# Phase 7: Add standby back to cluster
+- name: WarehousePG Failback - Register Standby
+  hosts: whpg_primary_coordinator
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    whpg_base_dir: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
+    whpg_coordinator_data_directory: /data/coordinator/gpseg-1
+  
+  tasks:
+    - name: Add DR coordinator as standby
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        
+        DR_HOST="{{ hostvars[groups['whpg_dr_coordinator'][0]].hostname | default(groups['whpg_dr_coordinator'][0]) }}"
+        
+        # Check if standby already registered
+        STANDBY_EXISTS=$(psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE content = -1 AND role = 'm';")
+        
+        if [ "$STANDBY_EXISTS" -eq "0" ]; then
+          echo "Adding standby coordinator: $DR_HOST"
+          gpinitstandby -s $DR_HOST -a
+        else
+          echo "Standby coordinator already configured"
+        fi
+      register: add_standby
+      failed_when: false
+      tags: [failback]
+
+    - name: Display standby registration result
+      debug:
+        msg: "{{ add_standby.stdout_lines }}"
+      tags: [failback]
+
+# Phase 8: Verify failback
+- name: WarehousePG Failback - Verification
+  hosts: whpg_primary_coordinator
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    whpg_base_dir: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
+    whpg_coordinator_data_directory: /data/coordinator/gpseg-1
+  
+  tasks:
+    - name: Check cluster status
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        gpstate -s
+      register: final_status
+      changed_when: false
+      tags: [verify]
+
+    - name: Check replication status
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        psql -d template1 -c "SELECT * FROM pg_stat_replication;"
+      register: replication_status
+      changed_when: false
+      failed_when: false
+      tags: [verify]
+
+    - name: Display failback completion summary
+      debug:
+        msg:
+          - "╔══════════════════════════════════════════════════════════════╗"
+          - "║              FAILBACK COMPLETE                               ║"
+          - "╠══════════════════════════════════════════════════════════════╣"
+          - "║ Primary Coordinator: {{ groups['whpg_primary_coordinator'][0] }}"
+          - "║ Standby Coordinator: {{ groups['whpg_dr_coordinator'][0] }}"
+          - "║                                                              ║"
+          - "║ Next Steps:                                                  ║"
+          - "║ 1. Verify application connectivity to primary site          ║"
+          - "║ 2. Monitor replication lag: gpstate -f                       ║"
+          - "║ 3. Recover segment mirrors if needed: gprecoverseg -a        ║"
+          - "╚══════════════════════════════════════════════════════════════╝"
+      tags: [verify]

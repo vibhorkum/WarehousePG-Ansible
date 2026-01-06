@@ -1,30 +1,102 @@
-# WarehousePG common variables for all hosts
+# ============================================================
+# WarehousePG Common Variables for All Hosts
+# ============================================================
+# This file contains variables shared across all roles.
+# Override these in inventory or playbook vars as needed.
 
-# Connection settings (can be overridden in inventory)
-# ansible_user: rocky
-# ansible_ssh_private_key_file: /path/to/your/key.pem
-
-# WarehousePG version
+# ============================================================
+# WarehousePG Version and Paths
+# ============================================================
 whpg_version: "7.3.0"
 whpg_rpm_version: "7.3.0-WHPG"
+whpg_install_path: "/usr/local/greenplum-db-{{ whpg_version }}-WHPG"
+whpg_base_dir: "{{ whpg_install_path }}"
 
-# Cluster configuration
+# ============================================================
+# Cluster Configuration
+# ============================================================
 whpg_cluster_name: "WarehousePG_HA_Cluster"
-whpg_coordinator_port: 5432
-whpg_segment_port_base: 6000
-whpg_standby_port: 5433
 
-# Network configuration
+# Coordinator settings
+whpg_coordinator_port: 5432
+whpg_coordinator_directory: "/data/coordinator"
+whpg_coordinator_data_directory: "{{ whpg_coordinator_directory }}/gpseg-1"
+
+# Segment settings
+whpg_segment_port_base: 6000
+whpg_mirror_port_base: 7000
+
+# ============================================================
+# Network Configuration
+# ============================================================
 whpg_pg_hba_allowed_cidr: "10.0.0.0/16"
 
-# System configuration
-whpg_file_limit: 65535
+# Network interface for replication (change if using dedicated network)
+# whpg_replication_interface: "eth0"
 
-# User configuration
+# ============================================================
+# Storage Configuration
+# ============================================================
+whpg_storage_base: "/data"
+whpg_coordinator_storage: "{{ whpg_storage_base }}/coordinator"
+whpg_primary_storage: "{{ whpg_storage_base }}/primary"
+whpg_mirror_storage: "{{ whpg_storage_base }}/mirror"
+
+# Segment data directories (determines segments per host)
+whpg_data_directories:
+  - "/data/primary/seg1"
+  - "/data/primary/seg2"
+
+whpg_mirror_data_directories:
+  - "/data/mirror/seg1"
+  - "/data/mirror/seg2"
+
+# ============================================================
+# User Configuration
+# ============================================================
 whpg_gpadmin_uid: 530
 whpg_gpadmin_gid: 530
 whpg_gpadmin_user: gpadmin
+whpg_gpadmin_home: "/home/gpadmin"
 
-# Include vault variables (if using Ansible Vault)
+# ============================================================
+# System Limits
+# ============================================================
+whpg_file_limit: 524288
+whpg_nofile_soft: 524288
+whpg_nofile_hard: 524288
+whpg_nproc_soft: 131072
+whpg_nproc_hard: 131072
+
+# ============================================================
+# Timeout Settings
+# ============================================================
+whpg_startup_timeout: 120
+whpg_failover_timeout: 300
+whpg_replication_timeout: 300
+
+# ============================================================
+# DR and Failover Settings
+# ============================================================
+# Enable DR site for segment mirrors
+whpg_use_dr_site_mirrors: true
+
+# DR takeover mode (kill primary segments during failover)
+whpg_failover_dr_takeover: true
+
+# Replication lag thresholds (MB)
+whpg_replication_lag_warning_mb: 50
+whpg_replication_lag_critical_mb: 200
+
+# ============================================================
+# Health Check Thresholds
+# ============================================================
+whpg_disk_warning_percent: 80
+whpg_disk_critical_percent: 90
+
+# ============================================================
+# EDB Repository Token
+# ============================================================
+# IMPORTANT: Store this in vault.yml for production
 # edb_subscription_token: defined in vault.yml
 # whpg_gpadmin_password: defined in vault.yml

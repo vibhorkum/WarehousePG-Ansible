@@ -1,0 +1,439 @@
+---
+# WarehousePG Health Check Playbook
+#
+# This playbook performs comprehensive health checks on the WarehousePG cluster.
+# Use this for ongoing monitoring and troubleshooting.
+#
+# Usage:
+#   # Full health check
+#   ansible-playbook -i inventory.yml health_check.yml
+#
+#   # Quick check (skip performance tests)
+#   ansible-playbook -i inventory.yml health_check.yml -e "whpg_health_quick=true"
+#
+#   # Check specific components
+#   ansible-playbook -i inventory.yml health_check.yml --tags coordinator
+#   ansible-playbook -i inventory.yml health_check.yml --tags segments
+#   ansible-playbook -i inventory.yml health_check.yml --tags replication
+#   ansible-playbook -i inventory.yml health_check.yml --tags storage
+
+- name: WarehousePG Health Check
+  hosts: whpg_primary_coordinator:whpg_dr_coordinator
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    whpg_base_dir: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
+    whpg_coordinator_data_directory: /data/coordinator/gpseg-1
+    whpg_coordinator_port: 5432
+    whpg_health_quick: false
+    whpg_disk_warning_percent: 80
+    whpg_disk_critical_percent: 90
+    whpg_replication_lag_warning_mb: 50
+    whpg_replication_lag_critical_mb: 200
+  
+  tasks:
+    # ==================== COORDINATOR CHECKS ====================
+    - name: "=== COORDINATOR HEALTH CHECKS ==="
+      debug:
+        msg: "Starting coordinator health checks on {{ inventory_hostname }}"
+      tags: [coordinator, always]
+
+    - name: Check if postgres is running
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        pg_isready -h localhost -p {{ whpg_coordinator_port }}
+      register: postgres_running
+      changed_when: false
+      failed_when: false
+      tags: [coordinator]
+
+    - name: Display postgres status
+      debug:
+        msg: "PostgreSQL Status: {{ 'RUNNING ✓' if postgres_running.rc == 0 else 'NOT RUNNING ✗' }}"
+      tags: [coordinator]
+
+    - name: Get cluster state using gpstate
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        gpstate -Q 2>/dev/null || echo "Cluster not running"
+      register: cluster_state
+      changed_when: false
+      failed_when: false
+      when: postgres_running.rc == 0
+      tags: [coordinator]
+
+    - name: Display cluster state
+      debug:
+        msg: "{{ cluster_state.stdout_lines }}"
+      when: cluster_state is defined and cluster_state.stdout_lines is defined
+      tags: [coordinator]
+
+    # ==================== SEGMENT CHECKS ====================
+    - name: "=== SEGMENT HEALTH CHECKS ==="
+      debug:
+        msg: "Starting segment health checks"
+      when: postgres_running.rc == 0
+      tags: [segments]
+
+    - name: Check segment status
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        gpstate -e 2>/dev/null || echo "Cannot get segment status"
+      register: segment_status
+      changed_when: false
+      failed_when: false
+      when: postgres_running.rc == 0
+      tags: [segments]
+
+    - name: Display segment status
+      debug:
+        msg: "{{ segment_status.stdout_lines }}"
+      when: segment_status is defined and segment_status.stdout_lines is defined
+      tags: [segments]
+
+    - name: Get down segment count
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE status = 'd';" 2>/dev/null | tr -d ' '
+      register: down_segments
+      changed_when: false
+      failed_when: false
+      when: postgres_running.rc == 0
+      tags: [segments]
+
+    - name: Display down segment alert
+      debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════╗
+          ║  ⚠️  WARNING: {{ down_segments.stdout | default('0') }} SEGMENT(S) DOWN!  ⚠️
+          ║  Run 'gprecoverseg -a' to recover failed segments.
+          ╚══════════════════════════════════════════════════════════════╝
+      when: 
+        - down_segments is defined 
+        - down_segments.stdout is defined
+        - down_segments.stdout | int > 0
+      tags: [segments]
+
+    - name: Get unbalanced segment count
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE role != preferred_role AND content >= 0;" 2>/dev/null | tr -d ' '
+      register: unbalanced_segments
+      changed_when: false
+      failed_when: false
+      when: postgres_running.rc == 0
+      tags: [segments]
+
+    - name: Display unbalanced segment alert
+      debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════╗
+          ║  ℹ️  INFO: {{ unbalanced_segments.stdout | default('0') }} segment(s) not in preferred role
+          ║  Run 'gprecoverseg -ra' to rebalance if desired.
+          ╚══════════════════════════════════════════════════════════════╝
+      when: 
+        - unbalanced_segments is defined 
+        - unbalanced_segments.stdout is defined
+        - unbalanced_segments.stdout | int > 0
+      tags: [segments]
+
+    # ==================== REPLICATION CHECKS ====================
+    - name: "=== REPLICATION HEALTH CHECKS ==="
+      debug:
+        msg: "Starting replication health checks"
+      when: postgres_running.rc == 0
+      tags: [replication]
+
+    - name: Check standby coordinator status
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        gpstate -f 2>/dev/null || echo "No standby configured or cannot get status"
+      register: standby_status
+      changed_when: false
+      failed_when: false
+      when: postgres_running.rc == 0
+      tags: [replication]
+
+    - name: Display standby status
+      debug:
+        msg: "{{ standby_status.stdout_lines }}"
+      when: standby_status is defined and standby_status.stdout_lines is defined
+      tags: [replication]
+
+    - name: Get replication lag
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        psql -d template1 -t -c "
+          SELECT 
+            client_addr,
+            state,
+            pg_wal_lsn_diff(sent_lsn, replay_lsn) / 1024 / 1024 AS lag_mb
+          FROM pg_stat_replication;
+        " 2>/dev/null
+      register: replication_lag
+      changed_when: false
+      failed_when: false
+      when: postgres_running.rc == 0
+      tags: [replication]
+
+    - name: Display replication lag
+      debug:
+        msg: |
+          Replication Status:
+          {{ replication_lag.stdout if replication_lag.stdout else 'No active replication connections' }}
+      when: replication_lag is defined
+      tags: [replication]
+
+    # ==================== STORAGE CHECKS ====================
+    - name: "=== STORAGE HEALTH CHECKS ==="
+      debug:
+        msg: "Starting storage health checks"
+      tags: [storage]
+
+    - name: Check coordinator disk usage
+      shell: |
+        df -h {{ whpg_coordinator_data_directory }} 2>/dev/null | tail -1 | awk '{print $5}' | tr -d '%'
+      register: coordinator_disk_usage
+      changed_when: false
+      failed_when: false
+      tags: [storage]
+
+    - name: Display coordinator disk usage
+      debug:
+        msg: |
+          Coordinator Disk Usage: {{ coordinator_disk_usage.stdout | default('Unknown') }}%
+          {% if coordinator_disk_usage.stdout | default('0') | int >= whpg_disk_critical_percent %}
+          ⚠️  CRITICAL: Disk usage above {{ whpg_disk_critical_percent }}%!
+          {% elif coordinator_disk_usage.stdout | default('0') | int >= whpg_disk_warning_percent %}
+          ⚠️  WARNING: Disk usage above {{ whpg_disk_warning_percent }}%
+          {% else %}
+          ✓ Disk usage OK
+          {% endif %}
+      tags: [storage]
+
+    - name: Check data directory sizes
+      become_user: gpadmin
+      shell: |
+        echo "=== Data Directory Sizes ==="
+        du -sh {{ whpg_coordinator_data_directory }} 2>/dev/null || echo "Cannot determine coordinator size"
+        du -sh /data/primary/seg*/gpseg* 2>/dev/null || true
+        du -sh /data/mirror/seg* 2>/dev/null || true
+      register: data_sizes
+      changed_when: false
+      failed_when: false
+      tags: [storage]
+
+    - name: Display data sizes
+      debug:
+        msg: "{{ data_sizes.stdout_lines }}"
+      when: data_sizes is defined and data_sizes.stdout_lines is defined
+      tags: [storage]
+
+    # ==================== CONNECTION CHECKS ====================
+    - name: "=== CONNECTION HEALTH CHECKS ==="
+      debug:
+        msg: "Starting connection health checks"
+      when: postgres_running.rc == 0
+      tags: [connections]
+
+    - name: Get active connections
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        psql -d template1 -t -c "
+          SELECT 
+            datname,
+            count(*) as connections,
+            count(*) FILTER (WHERE state = 'active') as active,
+            count(*) FILTER (WHERE state = 'idle') as idle
+          FROM pg_stat_activity 
+          WHERE backend_type = 'client backend'
+          GROUP BY datname;
+        " 2>/dev/null
+      register: active_connections
+      changed_when: false
+      failed_when: false
+      when: postgres_running.rc == 0
+      tags: [connections]
+
+    - name: Display active connections
+      debug:
+        msg: |
+          Active Connections by Database:
+          {{ active_connections.stdout if active_connections.stdout else 'No client connections' }}
+      when: active_connections is defined
+      tags: [connections]
+
+    - name: Get max connections setting
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        psql -d template1 -t -c "SHOW max_connections;" 2>/dev/null | tr -d ' '
+      register: max_connections
+      changed_when: false
+      failed_when: false
+      when: postgres_running.rc == 0
+      tags: [connections]
+
+    - name: Get current connection count
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        psql -d template1 -t -c "SELECT count(*) FROM pg_stat_activity;" 2>/dev/null | tr -d ' '
+      register: current_connections
+      changed_when: false
+      failed_when: false
+      when: postgres_running.rc == 0
+      tags: [connections]
+
+    - name: Display connection utilization
+      debug:
+        msg: |
+          Connection Utilization: {{ current_connections.stdout | default('0') }} / {{ max_connections.stdout | default('Unknown') }}
+          {% set util = (current_connections.stdout | default('0') | int / max_connections.stdout | default('1') | int * 100) | int %}
+          {% if util >= 90 %}
+          ⚠️  CRITICAL: Connection utilization above 90%!
+          {% elif util >= 75 %}
+          ⚠️  WARNING: Connection utilization above 75%
+          {% else %}
+          ✓ Connection utilization OK ({{ util }}%)
+          {% endif %}
+      when: postgres_running.rc == 0
+      tags: [connections]
+
+    # ==================== LOCKS CHECK ====================
+    - name: "=== LOCK HEALTH CHECKS ==="
+      debug:
+        msg: "Starting lock health checks"
+      when: postgres_running.rc == 0
+      tags: [locks]
+
+    - name: Check for blocking locks
+      become_user: gpadmin
+      shell: |
+        source {{ whpg_base_dir }}/greenplum_path.sh
+        export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+        psql -d template1 -c "
+          SELECT 
+            blocked.pid AS blocked_pid,
+            blocked.usename AS blocked_user,
+            blocking.pid AS blocking_pid,
+            blocking.usename AS blocking_user,
+            blocked.query AS blocked_query
+          FROM pg_stat_activity blocked
+          JOIN pg_locks blocked_locks ON blocked.pid = blocked_locks.pid
+          JOIN pg_locks blocking_locks ON blocking_locks.locktype = blocked_locks.locktype
+            AND blocking_locks.database IS NOT DISTINCT FROM blocked_locks.database
+            AND blocking_locks.relation IS NOT DISTINCT FROM blocked_locks.relation
+            AND blocking_locks.page IS NOT DISTINCT FROM blocked_locks.page
+            AND blocking_locks.tuple IS NOT DISTINCT FROM blocked_locks.tuple
+            AND blocking_locks.virtualxid IS NOT DISTINCT FROM blocked_locks.virtualxid
+            AND blocking_locks.transactionid IS NOT DISTINCT FROM blocked_locks.transactionid
+            AND blocking_locks.classid IS NOT DISTINCT FROM blocked_locks.classid
+            AND blocking_locks.objid IS NOT DISTINCT FROM blocked_locks.objid
+            AND blocking_locks.objsubid IS NOT DISTINCT FROM blocked_locks.objsubid
+            AND blocking_locks.pid != blocked_locks.pid
+          JOIN pg_stat_activity blocking ON blocking_locks.pid = blocking.pid
+          WHERE NOT blocked_locks.granted
+          LIMIT 10;
+        " 2>/dev/null
+      register: blocking_locks
+      changed_when: false
+      failed_when: false
+      when: postgres_running.rc == 0
+      tags: [locks]
+
+    - name: Display blocking locks
+      debug:
+        msg: |
+          {% if blocking_locks.stdout and 'rows)' not in blocking_locks.stdout %}
+          ⚠️  WARNING: Blocking locks detected!
+          {{ blocking_locks.stdout }}
+          {% else %}
+          ✓ No blocking locks detected
+          {% endif %}
+      when: blocking_locks is defined
+      tags: [locks]
+
+    # ==================== SUMMARY ====================
+    - name: "=== HEALTH CHECK SUMMARY ==="
+      debug:
+        msg:
+          - "╔══════════════════════════════════════════════════════════════╗"
+          - "║              HEALTH CHECK SUMMARY                            ║"
+          - "╠══════════════════════════════════════════════════════════════╣"
+          - "║ Host: {{ inventory_hostname }}"
+          - "║ Postgres: {{ 'RUNNING ✓' if postgres_running.rc == 0 else 'NOT RUNNING ✗' }}"
+          - "║ Down Segments: {{ down_segments.stdout | default('N/A') }}"
+          - "║ Unbalanced Segments: {{ unbalanced_segments.stdout | default('N/A') }}"
+          - "║ Disk Usage: {{ coordinator_disk_usage.stdout | default('N/A') }}%"
+          - "║ Connections: {{ current_connections.stdout | default('N/A') }} / {{ max_connections.stdout | default('N/A') }}"
+          - "╚══════════════════════════════════════════════════════════════╝"
+      tags: [summary, always]
+
+# Segment host checks
+- name: WarehousePG Segment Health Check
+  hosts: whpg_primary_segments:whpg_dr_segments
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    whpg_disk_warning_percent: 80
+    whpg_disk_critical_percent: 90
+  
+  tasks:
+    - name: "=== SEGMENT HOST CHECKS: {{ inventory_hostname }} ==="
+      debug:
+        msg: "Checking segment host health"
+      tags: [segments, storage]
+
+    - name: Check segment postgres processes
+      shell: |
+        pgrep -c -f 'postgres.*-D /data/primary' 2>/dev/null || echo "0"
+      register: segment_processes
+      changed_when: false
+      failed_when: false
+      tags: [segments]
+
+    - name: Check mirror postgres processes
+      shell: |
+        pgrep -c -f 'postgres.*-D /data/mirror' 2>/dev/null || echo "0"
+      register: mirror_processes
+      changed_when: false
+      failed_when: false
+      tags: [segments]
+
+    - name: Check segment disk usage
+      shell: |
+        df -h /data 2>/dev/null | tail -1 | awk '{print $5}' | tr -d '%'
+      register: segment_disk_usage
+      changed_when: false
+      failed_when: false
+      tags: [storage]
+
+    - name: Display segment host summary
+      debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "Primary segment processes: {{ segment_processes.stdout | default('0') }}"
+          - "Mirror segment processes: {{ mirror_processes.stdout | default('0') }}"
+          - "Disk usage: {{ segment_disk_usage.stdout | default('N/A') }}%"
+          - "{% if segment_disk_usage.stdout | default('0') | int >= whpg_disk_critical_percent %}⚠️ CRITICAL: Disk usage high!{% elif segment_disk_usage.stdout | default('0') | int >= whpg_disk_warning_percent %}⚠️ WARNING: Disk usage elevated{% else %}✓ Disk OK{% endif %}"
+      tags: [segments, storage, summary]
