@@ -12,23 +12,21 @@
   run_once: true
 
 - name: Check connectivity to primary coordinator
-  become: yes
-  become_user: gpadmin
   shell: |
-    timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=3 {{ groups['whpg_primary_coordinator'][0] }} "echo reachable" 2>/dev/null || echo "unreachable"
+    timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no {{ hostvars[groups['whpg_primary_coordinator'][0]].ansible_host }} "echo reachable" 2>/dev/null || echo "unreachable"
   register: primary_coord_check
   delegate_to: localhost
+  become: no
   changed_when: false
   failed_when: false
   run_once: true
 
 - name: Check connectivity to primary segments
-  become: yes
-  become_user: gpadmin
   shell: |
-    timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=3 {{ item }} "echo reachable" 2>/dev/null || echo "unreachable"
+    timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no {{ hostvars[item].ansible_host }} "echo reachable" 2>/dev/null || echo "unreachable"
   register: primary_seg_check
   delegate_to: localhost
+  become: no
   loop: "{{ primary_segment_hosts }}"
   changed_when: false
   failed_when: false
