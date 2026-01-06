@@ -38,20 +38,20 @@
 - name: Check if DR coordinator is already running as primary
   become: yes
   become_user: gpadmin
-  shell: |
-    source {{ whpg_base_dir }}/greenplum_path.sh
-    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
-    # Check if postgres is running and accepting connections
+  shell: >-
+    source {{ whpg_base_dir }}/greenplum_path.sh &&
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }} &&
     if pg_isready -h localhost -p {{ whpg_coordinator_port }} -t 5 2>/dev/null; then
-      # Check if it's a primary (no standby.signal and can write)
       if psql -d template1 -t -c "SELECT pg_is_in_recovery();" 2>/dev/null | grep -q 'f'; then
-        echo "ALREADY_PRIMARY"
+        echo "ALREADY_PRIMARY";
       else
-        echo "STANDBY_RUNNING"
-      fi
+        echo "STANDBY_RUNNING";
+      fi;
     else
-      echo "NOT_RUNNING"
+      echo "NOT_RUNNING";
     fi
+  args:
+    executable: /bin/bash
   delegate_to: "{{ dr_coordinator_host }}"
   register: dr_status
   changed_when: false
@@ -68,7 +68,7 @@
 - name: Skip promotion if already primary
   debug:
     msg: "DR coordinator is already running as primary. Skipping promotion."
-  when: dr_status.stdout | trim == 'ALREADY_PRIMARY'
+  when: "'ALREADY_PRIMARY' in dr_status.stdout"
   run_once: true
 
 # ============================================================
@@ -105,7 +105,7 @@
     exit $EXIT_CODE
   delegate_to: "{{ dr_coordinator_host }}"
   register: promote_result
-  when: dr_status.stdout | trim != 'ALREADY_PRIMARY'
+  when: "'ALREADY_PRIMARY' not in dr_status.stdout"
   run_once: true
 
 - name: Display promotion result

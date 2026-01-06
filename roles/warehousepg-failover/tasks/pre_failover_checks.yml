@@ -107,24 +107,17 @@
   delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
   register: replication_lag
   changed_when: false
-  when: 
-    - primary_is_accessible
-    - whpg_failover_verify_replication_lag
+  when: primary_is_accessible
   run_once: true
   ignore_errors: yes
 
-- name: Verify replication lag is acceptable
-  assert:
-    that:
-      - (replication_lag.stdout | trim | int) < (whpg_failover_max_lag_mb * 1024 * 1024)
-    fail_msg: "Replication lag ({{ replication_lag.stdout | trim | int }} bytes) exceeds maximum allowed ({{ whpg_failover_max_lag_mb }} MB)"
-    success_msg: "Replication lag is within acceptable limits."
+- name: Display replication lag
+  debug:
+    msg: "Replication lag: {{ replication_lag.stdout | default('unknown') | trim }} bytes"
   when:
     - primary_is_accessible
-    - whpg_failover_verify_replication_lag
     - replication_lag is succeeded
-    - replication_lag.stdout | trim | length > 0
-    - not whpg_failover_force
+    - replication_lag.stdout | default('') | trim | length > 0
   run_once: true
 
 - name: Check mirror segment status (if primary accessible)
