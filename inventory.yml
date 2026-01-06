@@ -5,86 +5,77 @@ all:
     # ============================================================
     ansible_user: rocky  # Change to your SSH user (ec2-user, ubuntu, rocky, etc.)
     ansible_ssh_private_key_file: ~/.ssh/id_rsa  # Path to your private key
-    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
-    
-    # Connection timeouts (recommended for cloud environments)
-    ansible_connect_timeout: 30
-    ansible_command_timeout: 600  # For long-running operations like gpinitsystem
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o ConnectTimeout=30'
     
   children:
+    # ============================================================
+    # PRIMARY SITE
+    # ============================================================
+    # Each site uses IDENTICAL hostnames (whpg-coordinator, whpg-segment)
+    # Site-local /etc/hosts maps to site-specific IPs
+    # Replication uses IP addresses or replication aliases
     whpg_primary_site:
       children:
         whpg_primary_coordinator:
           hosts:
             whpg-coordinator:
-              ansible_host: 3.22.42.68      # Public IP for SSH connection
-              private_ip: 10.0.2.40          # Private IP for replication (REQUIRED for DR)
+              ansible_host: 192.168.1.10     # Public/reachable IP for SSH
+              private_ip: 10.0.2.40          # Private IP for cluster communication
               hostname: whpg-coordinator
+              site_name: site1
+              replication_alias: site1-coordinator-repl
         
         # Primary segment servers
-        # Add as many segment servers as needed for your cluster
         # Total segments = (number of servers) × (length of whpg_data_directories)
-        # Example: 3 servers with 2 data directories = 6 segment instances
+        # Example: 2 servers with 2 data directories = 4 segment instances
         whpg_primary_segments:
           hosts:
             whpg-segment:
-              ansible_host: 18.226.172.107   # Public IP for SSH connection
-              private_ip: 10.0.9.61          # Private IP for replication (REQUIRED for DR)
+              ansible_host: 192.168.1.11     # Public/reachable IP for SSH
+              private_ip: 10.0.9.61          # Private IP for cluster communication
               hostname: whpg-segment
+              site_name: site1
+              replication_alias: site1-segment-repl
             
             # Add more segment servers as needed:
             # whpg-segment2:
-            #   ansible_host: 18.226.172.108
+            #   ansible_host: 192.168.1.12
             #   private_ip: 10.0.9.62
             #   hostname: whpg-segment2
-            # 
-            # whpg-segment3:
-            #   ansible_host: 18.226.172.109
-            #   private_ip: 10.0.9.63
-            #   hostname: whpg-segment3
-            # 
-            # whpg-segment4:
-            #   ansible_host: 18.226.172.110
-            #   private_ip: 10.0.9.64
-            #   hostname: whpg-segment4
+            #   site_name: site1
+            #   replication_alias: site1-segment2-repl
 
+    # ============================================================
+    # DR SITE (Disaster Recovery)
+    # ============================================================
+    # DR Site uses UNIQUE hostnames (dr-coordinator, dr-segment) to avoid conflicts
+    # This allows cross-site mirroring where DR can resolve primary hostnames
     whpg_dr_site:
       children:
         whpg_dr_coordinator:
           hosts:
             dr-coordinator:
-              ansible_host: 210.0.0.4        # Public IP for SSH connection
-              private_ip: 10.0.10.40         # Private IP for replication (REQUIRED)
+              ansible_host: 192.168.2.10     # Public/reachable IP for SSH
+              private_ip: 10.0.10.40         # Private IP for cluster communication
               hostname: dr-coordinator
-              upstream_cluster: whpg_primary_site
-              replication_slot: dr-coordinator
-              restore_command: "rsync -a /mnt/wal_archive/whpg-coordinator/%f \"%p\""
+              site_name: site2
+              replication_alias: site2-coordinator-repl
               
         # DR segment servers (for mirrors when using whpg_use_dr_site_mirrors)
         # Should match the number and configuration of primary segments
         whpg_dr_segments:
           hosts:
             dr-segment:
-              ansible_host: 210.0.0.1        # Public IP for SSH connection
-              private_ip: 10.0.12.61         # Private IP for replication (REQUIRED)
+              ansible_host: 192.168.2.11     # Public/reachable IP for SSH
+              private_ip: 10.0.12.61         # Private IP for cluster communication
               hostname: dr-segment
-              upstream_segment: whpg-segment
-              replication_slot: dr-segment
-              restore_command: "rsync -a /mnt/wal_archive/whpg-segment/%f \"%p\""
+              site_name: site2
+              replication_alias: site2-segment-repl
             
             # Add DR segment servers to match primary segment count:
             # dr-segment2:
-            #   ansible_host: 210.0.0.2
+            #   ansible_host: 192.168.2.12
             #   private_ip: 10.0.12.62
             #   hostname: dr-segment2
-            #   upstream_segment: whpg-segment2
-            #   replication_slot: dr-segment2
-            #   restore_command: "rsync -a /mnt/wal_archive/whpg-segment2/%f \"%p\""
-            # 
-            # dr-segment3:
-            #   ansible_host: 210.0.0.3
-            #   private_ip: 10.0.12.63
-            #   hostname: dr-segment3
-            #   upstream_segment: whpg-segment3
-            #   replication_slot: dr-segment3
-            #   restore_command: "rsync -a /mnt/wal_archive/whpg-segment3/%f \"%p\""
+            #   site_name: site2
+            #   replication_alias: site2-segment2-repl

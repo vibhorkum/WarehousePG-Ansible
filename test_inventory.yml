@@ -1,70 +1,57 @@
 all:
   vars:
-    # SSH Configuration - Update these values
+    # ============================================================
+    # SSH Configuration - Update these values for your environment
+    # ============================================================
     ansible_user: rocky  # Change to your SSH user (ec2-user, ubuntu, rocky, etc.)
-    ansible_ssh_private_key_file: /Users/vibhor.kumar/.ssh/Vibhor-Pioneer-AWS-Key.pem  # Full path to your private key
-    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    ansible_ssh_private_key_file: /Users/vibhor.kumar/.ssh/Vibhor-Pioneer-AWS-Key.pem
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o ConnectTimeout=30'
+    
   children:
-    # PRIMARY SITE - Currently Site 1 (US East 2, Subnets 10.0.2.0/24, 10.0.9.0/24)
-    # Each site uses IDENTICAL hostnames (whpg-coordinator, whpg-segment)
-    # Site-local /etc/hosts maps to site-specific IPs
-    # Replication uses IP addresses or replication aliases (site1-coord-repl)
+    # ============================================================
+    # PRIMARY SITE (Site 1 - US East 2)
+    # ============================================================
+    # Subnets: 10.0.2.0/24 (coordinator), 10.0.9.0/24 (segments)
     whpg_primary_site:
       children:
         whpg_primary_coordinator:
           hosts:
             whpg-coordinator:
-              ansible_host: 3.22.42.68
+              ansible_host: 3.22.42.68       # Public IP for SSH
+              private_ip: 10.0.2.40          # Private IP for cluster communication
               hostname: whpg-coordinator
-              private_ip: 10.0.2.40
-              use_private_ip: true
               site_name: site1
               replication_alias: site1-coordinator-repl
         
-        # Primary segment servers
-        # You can add as many segment servers as needed
-        # Each server will host the number of segments defined by whpg_data_directories length
         whpg_primary_segments:
           hosts:
             whpg-segment:
-              ansible_host: 18.226.172.107
-              private_ip: 10.0.9.61
+              ansible_host: 18.226.172.107   # Public IP for SSH
+              private_ip: 10.0.9.61          # Private IP for cluster communication
               hostname: whpg-segment
-              use_private_ip: true
               site_name: site1
               replication_alias: site1-segment-repl
-            
-            # Example: Add more segment servers by uncommenting below
-            # site1-segment2:
-            #   ansible_host: 18.226.172.108
-            #   private_ip: 10.0.9.62
-            #   hostname: site1-segment2, Subnets 10.0.10.0/24, 10.0.12.0/24)
-    # DR Site uses UNIQUE hostnames (dr-coordinator, dr-segment) to avoid conflicts
-    # This allows cross-site mirroring where DR can resolve primary hostnames
-    # For failover scenarios, update /etc/hosts to swap hostname mappings
-    # NOTE: Inventory names must be unique (dr-coordinator, dr-segment)
+
+    # ============================================================
+    # DR SITE (Site 2 - US East 2)
+    # ============================================================
+    # Subnets: 10.0.10.0/24 (coordinator), 10.0.12.0/24 (segments)
     whpg_dr_site:
       children:
         whpg_dr_coordinator:
           hosts:
             dr-coordinator:
-              ansible_host: 3.137.161.206
+              ansible_host: 3.137.161.206    # Public IP for SSH
+              private_ip: 10.0.10.232        # Private IP for cluster communication
               hostname: dr-coordinator
-              private_ip: 10.0.10.232
-              use_private_ip: true
               site_name: site2
               replication_alias: site2-coordinator-repl
-              replication_server: site1-coordinator-repl  # Primary site coordinator for standby setup
-        
-        # DR segment servers (for mirrors when using whpg_use_dr_site_mirrors)
-        # Should match the number and configuration of primary segments
+              
         whpg_dr_segments:
           hosts:
             dr-segment:
-              ansible_host: 3.139.108.84
+              ansible_host: 3.139.108.84     # Public IP for SSH
+              private_ip: 10.0.12.215        # Private IP for cluster communication
               hostname: dr-segment
-              private_ip: 10.0.12.215
-              use_private_ip: true
               site_name: site2
               replication_alias: site2-segment-repl
-              replication_server: site1-segment-repl  # Primary site segment for mirror replication

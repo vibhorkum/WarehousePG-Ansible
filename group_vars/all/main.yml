@@ -31,6 +31,10 @@ whpg_mirror_port_base: 7000
 # ============================================================
 whpg_pg_hba_allowed_cidr: "10.0.0.0/16"
 
+# IP preference for /etc/hosts entries: 'private_ip' or 'ansible_host'
+# Use 'private_ip' for cloud environments with VPC/private networking
+whpg_hosts_ip_preference: "private_ip"
+
 # Network interface for replication (change if using dedicated network)
 # whpg_replication_interface: "eth0"
 
