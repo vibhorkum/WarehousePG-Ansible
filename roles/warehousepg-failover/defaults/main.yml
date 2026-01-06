@@ -1,41 +1,62 @@
 ---
 # Default variables for WarehousePG Failover Role
+#
+# This role uses the correct Greenplum DR workflow:
+#   1. gpactivatestandby - Promotes DR coordinator
+#   2. FTS auto-failover - Segments are handled automatically
+#   3. gprecoverseg - Used ONLY for recovery (after failover)
 
-# Failover mode: 'planned' or 'unplanned'
-# planned: Graceful failover with data sync verification
+# ============================================================================
+# Failover Mode
+# ============================================================================
+# planned: Graceful failover - stops primary cluster first
 # unplanned: Emergency failover when primary is unavailable
 whpg_failover_mode: planned
 
-# Pre-failover checks
-whpg_failover_verify_replication_lag: true
-whpg_failover_max_lag_mb: 10
-whpg_failover_verify_connectivity: true
+# ============================================================================
+# Pre-Failover Settings
+# ============================================================================
+# Skip all pre-flight checks
+whpg_failover_skip_checks: false
 
-# Post-failover actions
-whpg_failover_update_dns: false
-whpg_failover_notify_applications: false
+# Force failover even if safety checks fail
+whpg_failover_force: false
 
-# Coordinator configuration
+# ============================================================================
+# Coordinator Configuration
+# ============================================================================
 whpg_coordinator_port: 5432
 whpg_coordinator_data_directory: /data/coordinator/gpseg-1
 
-# Segment data directories - used for DR takeover cleanup
-# These should match your DR site's mirror directories
-whpg_mirror_data_directories:
-  - "/data/mirror/seg1"
-  - "/data/mirror/seg2"
-
-# Base directory
+# Base directory for Greenplum installation
 whpg_base_dir: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
 
-# Timeout settings (seconds)
+# ============================================================================
+# FTS (Fault Tolerance Service) Settings
+# ============================================================================
+# Time to wait for FTS to automatically failover segments (seconds)
+# FTS typically completes within 30-60 seconds
+whpg_fts_wait_timeout: 120
+
+# Initial wait before checking FTS status (allows FTS to detect failures)
+whpg_fts_initial_wait: 30
+
+# ============================================================================
+# Timeout Settings
+# ============================================================================
+# Overall failover operation timeout (seconds)
 whpg_failover_timeout: 300
+
+# Timeout for cluster startup operations (seconds)
 whpg_startup_timeout: 120
 
-# Safety settings
-whpg_failover_force: false
-whpg_failover_skip_checks: false
+# ============================================================================
+# Recovery Settings (used in post_failover_verify.yml)
+# ============================================================================
+# Whether to automatically attempt gprecoverseg after failover
+# Set to false - recovery should be a deliberate operation
+whpg_auto_recover_segments: false
 
-# DR Site takeover - when true, stops primary site segments to force DR mirrors to become primaries
-# This ensures all data processing happens on the DR site after failover
-whpg_failover_dr_takeover: true
+# Use full recovery (-F flag) instead of incremental
+# Full recovery is slower but more reliable
+whpg_recovery_full_mode: false

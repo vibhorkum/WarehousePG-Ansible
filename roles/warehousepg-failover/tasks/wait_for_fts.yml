@@ -1,0 +1,241 @@
+---
+# Phase 2: Wait for FTS to Handle Segment Failover
+#
+# IMPORTANT: We do NOT manually manipulate segments!
+# The Fault Tolerance Service (FTS) automatically:
+#   1. Detects that primary segments are unreachable
+#   2. Promotes mirror segments to "Acting Primary" status
+#   3. Updates gp_segment_configuration accordingly
+#
+# This task file monitors and verifies the automatic failover.
+
+- name: Get DR coordinator host
+  set_fact:
+    dr_coordinator_host: "{{ groups['whpg_dr_coordinator'][0] }}"
+  run_once: true
+
+- name: Display FTS information
+  debug:
+    msg:
+      - "========================================="
+      - "Phase 2: Automatic Segment Failover (FTS)"
+      - "========================================="
+      - "The Fault Tolerance Service (FTS) will automatically:"
+      - "  1. Probe all segments"
+      - "  2. Detect unreachable primary segments"
+      - "  3. Promote DR mirrors to 'Acting Primary'"
+      - ""
+      - "This process is AUTOMATIC - no manual intervention needed."
+  run_once: true
+
+# ============================================================
+# Wait for FTS to probe and update segment status
+# ============================================================
+- name: Wait for FTS probe cycle
+  pause:
+    seconds: 30
+    prompt: "Waiting for FTS to detect segment status changes..."
+  run_once: true
+
+- name: Check current segment configuration
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    
+    echo "=== Current Segment Configuration ==="
+    psql -d template1 -c "
+      SELECT 
+        content,
+        role,
+        preferred_role,
+        status,
+        mode,
+        hostname,
+        port
+      FROM gp_segment_configuration
+      WHERE content >= 0
+      ORDER BY content, role;
+    "
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: segment_config
+  changed_when: false
+  run_once: true
+
+- name: Display segment configuration
+  debug:
+    var: segment_config.stdout_lines
+  run_once: true
+
+# ============================================================
+# Check segment status with gpstate
+# ============================================================
+- name: Check mirror status with gpstate -m
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstate -m
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: mirror_status
+  changed_when: false
+  failed_when: false
+  run_once: true
+
+- name: Display mirror status
+  debug:
+    var: mirror_status.stdout_lines
+  run_once: true
+
+- name: Check segment health with gpstate -e
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstate -e
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: segment_health
+  changed_when: false
+  failed_when: false
+  run_once: true
+
+- name: Display segment health
+  debug:
+    var: segment_health.stdout_lines
+  run_once: true
+
+# ============================================================
+# Analyze segment status
+# ============================================================
+- name: Count segments by status
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    
+    echo "=== Segment Status Summary ==="
+    
+    # Total segments
+    TOTAL=$(psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE content >= 0;")
+    echo "Total segment entries: $TOTAL"
+    
+    # Up segments
+    UP=$(psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE content >= 0 AND status = 'u';")
+    echo "Segments UP: $UP"
+    
+    # Down segments
+    DOWN=$(psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE content >= 0 AND status = 'd';")
+    echo "Segments DOWN: $DOWN"
+    
+    # Segments acting as different role than preferred
+    FAILEDOVER=$(psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE content >= 0 AND role != preferred_role;")
+    echo "Segments in failover state (role != preferred): $FAILEDOVER"
+    
+    # Segments in sync
+    SYNCED=$(psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE content >= 0 AND mode = 's';")
+    echo "Segments synchronized: $SYNCED"
+    
+    # Segments in change tracking
+    CHANGETRACKING=$(psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE content >= 0 AND mode = 'c';")
+    echo "Segments in change tracking: $CHANGETRACKING"
+    
+    # Segments not syncing
+    NOTSYNCING=$(psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE content >= 0 AND mode = 'n';")
+    echo "Segments not syncing: $NOTSYNCING"
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: segment_summary
+  changed_when: false
+  run_once: true
+
+- name: Display segment summary
+  debug:
+    var: segment_summary.stdout_lines
+  run_once: true
+
+# ============================================================
+# Verify DR segments are now acting as primaries
+# ============================================================
+- name: Verify DR segments status
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    
+    echo "=== Verifying DR Segments ==="
+    
+    # Check segments on DR site
+    DR_SEGMENTS=$(psql -d template1 -t -c "
+      SELECT count(*) 
+      FROM gp_segment_configuration 
+      WHERE content >= 0 
+        AND role = 'p' 
+        AND status = 'u';
+    ")
+    
+    echo "Active primary segments: $DR_SEGMENTS"
+    
+    # Show which segments are acting as primaries
+    echo ""
+    echo "Segments currently acting as PRIMARY:"
+    psql -d template1 -c "
+      SELECT content, hostname, port, status, mode
+      FROM gp_segment_configuration
+      WHERE content >= 0 AND role = 'p'
+      ORDER BY content;
+    "
+    
+    # Show failed/down segments (old primaries)
+    echo ""
+    echo "Segments currently DOWN (old primary site):"
+    psql -d template1 -c "
+      SELECT content, hostname, port, preferred_role
+      FROM gp_segment_configuration
+      WHERE content >= 0 AND status = 'd'
+      ORDER BY content;
+    " 2>/dev/null || echo "No down segments found"
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: dr_segment_verify
+  changed_when: false
+  run_once: true
+
+- name: Display DR segment verification
+  debug:
+    var: dr_segment_verify.stdout_lines
+  run_once: true
+
+# ============================================================
+# Final cluster operational check
+# ============================================================
+- name: Test cluster is operational (can run queries)
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    
+    echo "=== Testing Cluster Operations ==="
+    
+    # Test basic query
+    echo "Testing SELECT..."
+    psql -d template1 -c "SELECT 1 AS test_query;" || exit 1
+    
+    # Test distributed query
+    echo ""
+    echo "Testing distributed query..."
+    psql -d template1 -c "SELECT gp_segment_id, count(*) FROM gp_dist_random('gp_id') GROUP BY 1 ORDER BY 1;" || exit 1
+    
+    echo ""
+    echo "=== Cluster is OPERATIONAL ==="
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: cluster_test
+  run_once: true
+
+- name: Display cluster test result
+  debug:
+    var: cluster_test.stdout_lines
+  run_once: true

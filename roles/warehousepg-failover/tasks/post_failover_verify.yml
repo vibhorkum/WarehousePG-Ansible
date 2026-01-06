@@ -1,11 +1,21 @@
 ---
-# Post-failover verification
+# Phase 3: Post-failover verification and optional segment recovery
+#
+# After failover:
+#   - DR coordinator is now PRIMARY
+#   - DR segments are "Acting Primary" 
+#   - Old primary segments are DOWN
+#
+# This phase verifies the cluster and optionally recovers old primary segments.
 
-- name: Get DR coordinator for verification
+- name: Get DR coordinator host
   set_fact:
     dr_coordinator_host: "{{ groups['whpg_dr_coordinator'][0] }}"
   run_once: true
 
+# ============================================================
+# Verify cluster is operational
+# ============================================================
 - name: Verify new primary coordinator is responding
   become: yes
   become_user: gpadmin
@@ -23,7 +33,7 @@
     msg: "Database is responding: {{ version_check.stdout_lines | last }}"
   run_once: true
 
-- name: Check cluster state
+- name: Check overall cluster state
   become: yes
   become_user: gpadmin
   shell: |
@@ -33,6 +43,7 @@
   delegate_to: "{{ dr_coordinator_host }}"
   register: cluster_state
   changed_when: false
+  failed_when: false
   run_once: true
 
 - name: Display cluster state
@@ -40,29 +51,9 @@
     var: cluster_state.stdout_lines
   run_once: true
 
-- name: Check for any down segments
-  become: yes
-  become_user: gpadmin
-  shell: |
-    source {{ whpg_base_dir }}/greenplum_path.sh
-    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
-    gpstate -e
-  delegate_to: "{{ dr_coordinator_host }}"
-  register: segment_health
-  changed_when: false
-  failed_when: false
-  run_once: true
-
-- name: Verify all segments are running
-  assert:
-    that:
-      - "'All segments are running normally' in segment_health.stdout or segment_health.rc == 0"
-    fail_msg: "WARNING: Some segments may not be running. Check gpstate -e for details."
-    success_msg: "All segments are running normally."
-  when: not whpg_failover_force
-  run_once: true
-  ignore_errors: yes
-
+# ============================================================
+# Get final segment configuration
+# ============================================================
 - name: Get final segment configuration
   become: yes
   become_user: gpadmin
@@ -70,7 +61,15 @@
     source {{ whpg_base_dir }}/greenplum_path.sh
     export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
     psql -d template1 -c "
-      SELECT content, role, preferred_role, status, hostname, address, port
+      SELECT 
+        content,
+        role as current_role,
+        preferred_role,
+        CASE WHEN role = preferred_role THEN 'Normal' ELSE 'Failover' END as state,
+        status,
+        mode,
+        hostname,
+        port
       FROM gp_segment_configuration
       ORDER BY content, role;
     "
@@ -84,6 +83,9 @@
     var: final_config.stdout_lines
   run_once: true
 
+# ============================================================
+# Test database write capability
+# ============================================================
 - name: Test database write capability
   become: yes
   become_user: gpadmin
@@ -91,8 +93,8 @@
     source {{ whpg_base_dir }}/greenplum_path.sh
     export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
     psql -d template1 -c "
-      CREATE TEMP TABLE failover_test (id int);
-      INSERT INTO failover_test VALUES (1);
+      CREATE TEMP TABLE failover_test (id int, ts timestamp default now());
+      INSERT INTO failover_test (id) VALUES (1);
       SELECT * FROM failover_test;
       DROP TABLE failover_test;
     "
@@ -101,23 +103,103 @@
   changed_when: false
   run_once: true
 
-- name: Verify write capability
+- name: Display write test result
   debug:
-    msg: "Database write test: {{ 'PASSED' if write_test.rc == 0 else 'FAILED' }}"
+    msg: "Write test: {{ 'PASSED' if write_test.rc == 0 else 'FAILED' }}"
   run_once: true
 
-- name: Generate failover report
+# ============================================================
+# Check if segment recovery is needed/possible
+# ============================================================
+- name: Check for down segments
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE status = 'd' AND content >= 0;"
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: down_segment_count
+  changed_when: false
+  run_once: true
+
+- name: Display recovery guidance
   debug:
     msg:
       - "========================================="
-      - "Failover Verification Report"
+      - "Segment Recovery Information"
       - "========================================="
-      - "New Primary Coordinator: {{ dr_coordinator_host }}"
-      - "Coordinator Port: {{ whpg_coordinator_port }}"
-      - "Database Version: {{ version_check.stdout_lines | last | default('Unknown') }}"
-      - "Write Test: {{ 'PASSED' if write_test.rc == 0 else 'FAILED' }}"
-      - "Cluster Health: {{ 'HEALTHY' if 'All segments are running normally' in segment_health.stdout else 'CHECK REQUIRED' }}"
+      - "Down segments: {{ down_segment_count.stdout | trim }}"
       - ""
-      - "Connection String:"
-      - "  postgresql://gpadmin@{{ hostvars[dr_coordinator_host].ansible_host }}:{{ whpg_coordinator_port }}/template1"
+      - "{% if (down_segment_count.stdout | trim | int) > 0 %}To recover the old primary site as mirrors:"
+      - "  1. Ensure old primary hosts are accessible"
+      - "  2. Run: gprecoverseg -a    (incremental recovery)"
+      - "  3. Or:  gprecoverseg -aF   (full recovery)"
+      - ""
+      - "To rebalance after recovery (swap roles back):"
+      - "  gprecoverseg -ra{% else %}All segments are operational. No recovery needed.{% endif %}"
+  run_once: true
+
+# ============================================================
+# Optional: Attempt segment recovery if old primaries are accessible
+# ============================================================
+- name: Attempt automatic segment recovery
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    
+    echo "=== Attempting Segment Recovery ==="
+    
+    # First try incremental recovery
+    echo "Trying incremental recovery (gprecoverseg -a)..."
+    if gprecoverseg -a 2>&1; then
+      echo "Incremental recovery initiated successfully"
+      exit 0
+    fi
+    
+    echo ""
+    echo "Incremental recovery failed - old primary hosts may be unreachable"
+    echo "This is normal if the primary site is down"
+    echo ""
+    echo "When primary site is available, run manually:"
+    echo "  gprecoverseg -a   (incremental)"
+    echo "  gprecoverseg -aF  (full rebuild)"
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: recovery_attempt
+  when: 
+    - (down_segment_count.stdout | trim | int) > 0
+    - whpg_failover_auto_recover | default(true)
+  failed_when: false
+  run_once: true
+
+- name: Display recovery attempt result
+  debug:
+    var: recovery_attempt.stdout_lines
+  when: recovery_attempt is defined and recovery_attempt.stdout_lines is defined
+  run_once: true
+
+# ============================================================
+# Final status summary
+# ============================================================
+- name: Display failover completion summary
+  debug:
+    msg:
+      - "╔══════════════════════════════════════════════════════════════╗"
+      - "║              FAILOVER COMPLETE                               ║"
+      - "╠══════════════════════════════════════════════════════════════╣"
+      - "║ New Primary Coordinator: {{ dr_coordinator_host }}"
+      - "║ Connection: {{ hostvars[dr_coordinator_host].ansible_host }}:{{ whpg_coordinator_port }}"
+      - "║"
+      - "║ Down Segments: {{ down_segment_count.stdout | trim }}"
+      - "║"
+      - "║ IMPORTANT:"
+      - "║ • Update application connection strings"
+      - "║ • Monitor cluster: gpstate -s"
+      - "║ • Check segments: gpstate -m"
+      - "║"
+      - "║ To recover old primary site (when available):"
+      - "║   gprecoverseg -a"
+      - "╚══════════════════════════════════════════════════════════════╝"
   run_once: true

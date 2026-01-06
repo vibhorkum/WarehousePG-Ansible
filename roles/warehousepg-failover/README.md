@@ -1,15 +1,31 @@
 # WarehousePG Failover Role
 
-This role handles failover from the primary WarehousePG site to the DR site.
+This role handles failover from the primary WarehousePG site to the DR site using
+the standard Greenplum DR workflow.
 
 ## Overview
 
-The failover role performs the following operations:
-1. **Pre-flight checks** - Verifies connectivity, replication lag, and mirror status
+The failover role uses the **correct industry-standard Greenplum DR workflow**:
+
+1. **Pre-flight checks** - Verifies connectivity and cluster readiness
 2. **Stop primary** (planned failover only) - Gracefully stops the primary cluster
-3. **Promote standby** - Promotes the DR standby coordinator to primary
-4. **Activate mirrors** - Ensures segment mirrors take over as primaries
-5. **Post-failover verification** - Validates the new cluster is operational
+3. **Promote standby coordinator** - Uses `gpactivatestandby` to promote DR coordinator
+4. **FTS automatic segment failover** - Fault Tolerance Service automatically promotes mirrors
+5. **Post-failover verification** - Validates cluster and provides recovery guidance
+
+### Critical Design Principles
+
+- **DO NOT manually rename segment directories** - This corrupts catalog metadata
+- **FTS handles segment failover automatically** - No manual intervention needed
+- **`gprecoverseg` is for recovery ONLY** - Used after DR is running to rebuild old primary
+
+### How FTS Segment Failover Works
+
+When `gpactivatestandby` promotes the DR coordinator:
+1. The new coordinator connects to segments
+2. FTS detects that original primary segments are unreachable
+3. FTS automatically promotes DR mirror segments to "Acting Primary" (role='m', preferred_role='p')
+4. The cluster becomes fully operational automatically
 
 ## Requirements
 
@@ -24,7 +40,7 @@ Use for scheduled maintenance or controlled switchover:
 ```yaml
 whpg_failover_mode: planned
 ```
-- Gracefully stops primary cluster
+- Gracefully stops primary cluster with `gpstop -M fast -a`
 - Verifies replication is in sync
 - Minimal to no data loss
 
@@ -59,11 +75,6 @@ ansible-playbook -i inventory.yml failover.yml -e "whpg_failover_mode=unplanned"
 ansible-playbook -i inventory.yml failover.yml -e "whpg_failover_force=true"
 ```
 
-### Skip All Pre-checks
-```bash
-ansible-playbook -i inventory.yml failover.yml -e "whpg_failover_skip_checks=true"
-```
-
 ## Variables
 
 | Variable | Default | Description |
@@ -71,28 +82,39 @@ ansible-playbook -i inventory.yml failover.yml -e "whpg_failover_skip_checks=tru
 | `whpg_failover_mode` | `planned` | `planned` or `unplanned` |
 | `whpg_failover_force` | `false` | Skip safety assertions |
 | `whpg_failover_skip_checks` | `false` | Skip all pre-flight checks |
-| `whpg_failover_verify_replication_lag` | `true` | Check replication lag before failover |
-| `whpg_failover_max_lag_mb` | `10` | Maximum allowed replication lag in MB |
 | `whpg_coordinator_data_directory` | `/data/coordinator/gpseg-1` | Coordinator data directory |
 | `whpg_coordinator_port` | `5432` | Coordinator port |
+| `whpg_fts_wait_timeout` | `120` | Seconds to wait for FTS segment failover |
 
 ## Post-Failover Actions
 
 After failover completes:
 
-1. **Update application connection strings** to point to new primary:
-   - Host: DR coordinator IP/hostname
-   - Port: 5432 (default)
+### 1. Update Application Connections
+Point applications to the new primary:
+- **Host**: DR coordinator IP/hostname
+- **Port**: 5432 (default)
 
-2. **Verify cluster health**:
-   ```bash
-   gpstate -e  # Check segment status
-   gpstate -s  # Check cluster summary
-   ```
+### 2. Verify Cluster Health
+```bash
+gpstate -s   # Cluster summary
+gpstate -e   # Segment status (may show Down segments for old primary)
+gpstate -m   # Mirror status
+```
 
-3. **Plan for failback** (when original primary is recovered):
-   - Rebuild old primary as new standby
-   - Re-establish segment mirrors
+### 3. Recover Old Primary Site (When Ready)
+When the old primary site is back online and you want to rebuild it as mirrors:
+
+```bash
+# Option A: Incremental recovery (faster, if data directories intact)
+gprecoverseg -a
+
+# Option B: Full recovery (if data directories corrupted/missing)
+gprecoverseg -aF
+
+# After recovery completes, optionally rebalance to original roles
+gprecoverseg -ra
+```
 
 ## Example Playbook
 
@@ -124,10 +146,43 @@ Create `failover.yml`:
 2. Check standby process: `ps aux | grep postgres`
 3. Check logs: `cat $COORDINATOR_DATA_DIRECTORY/log/startup.log`
 
-### Segments not activating
-1. Check segment status: `gpstate -e`
-2. Run manual recovery: `gprecoverseg -a`
-3. Check segment logs on DR segment hosts
+### Segments showing "Acting Primary" (role=m, preferred_role=p)
+This is NORMAL after failover. The mirrors have taken over as primaries.
+- Cluster is operational - no action required
+- Run `gprecoverseg -a` when old primary site is available to rebuild it
+
+### Some segments still Down
+If FTS hasn't completed:
+1. Wait longer (FTS may take up to 2 minutes)
+2. Check: `gpstate -e`
+3. The Down segments are the OLD primary site - expected if that site is offline
+
+### Want to recover old primary site as mirrors
+```bash
+# After old primary site is back online:
+gprecoverseg -a         # Incremental recovery
+# OR
+gprecoverseg -aF        # Full recovery (slower, more reliable)
+
+# Then optionally rebalance to original preferred roles:
+gprecoverseg -ra
+```
+
+## Architecture Notes
+
+### Why We Don't Rename Directories
+
+The old approach of renaming segment directories is **dangerous** because:
+1. Greenplum's `gp_segment_configuration` catalog tracks segments by their data directories
+2. Renaming directories causes the catalog to become inconsistent
+3. Can lead to split-brain scenarios where old and new primaries both think they're active
+4. Corrupts the cluster metadata
+
+### The Correct Approach
+
+1. **gpactivatestandby** - Promotes the standby coordinator, which becomes the new cluster coordinator
+2. **FTS (Fault Tolerance Service)** - Automatically detects that old primary segments are unreachable and promotes mirrors
+3. **gprecoverseg** - Used ONLY for recovery, not for failover. Rebuilds segments from existing primaries.
 
 ## Author
 

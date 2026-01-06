@@ -1,65 +1,65 @@
 ---
 # Main tasks for WarehousePG Failover Role
 #
-# This role performs failover from primary site to DR site:
-# 1. Pre-flight checks (connectivity, replication lag, etc.)
-# 2. Stop primary coordinator (if accessible in planned failover)
-# 3. Promote standby coordinator to primary
-# 4. Activate segment mirrors as new primaries
-# 5. Verify new cluster state
-# 6. Post-failover tasks
+# Correct DR Failover Workflow:
+# 
+# Phase 1: Promote DR Coordinator (gpactivatestandby)
+#   - This is the ONLY manual step required
+#   - The standby coordinator becomes the new primary
+#
+# Phase 2: FTS Handles Segment Failover (AUTOMATIC)
+#   - Fault Tolerance Service detects unreachable primaries
+#   - Automatically promotes DR mirrors to "Acting Primary"
+#   - NO manual directory manipulation required
+#
+# Phase 3: Verify and Optionally Recover
+#   - Verify cluster is operational
+#   - Optionally run gprecoverseg to rebuild old primary site
+#
+# IMPORTANT: Do NOT rename segment directories - this corrupts metadata!
 
 - name: Display failover information
   debug:
     msg:
-      - "========================================="
-      - "WarehousePG Failover Operation"
-      - "========================================="
-      - "Failover Mode: {{ whpg_failover_mode }}"
-      - "Target DR Coordinator: {{ groups['whpg_dr_coordinator'][0] }}"
-      - "Force Mode: {{ whpg_failover_force }}"
-      - "Skip Checks: {{ whpg_failover_skip_checks }}"
+      - "╔══════════════════════════════════════════════════════════════╗"
+      - "║              WarehousePG Failover Operation                  ║"
+      - "╠══════════════════════════════════════════════════════════════╣"
+      - "║ Failover Mode: {{ whpg_failover_mode }}"
+      - "║ Target DR Coordinator: {{ groups['whpg_dr_coordinator'][0] }}"
+      - "║ Force Mode: {{ whpg_failover_force }}"
+      - "╠══════════════════════════════════════════════════════════════╣"
+      - "║ Workflow:                                                     ║"
+      - "║   Phase 1: Stop primary (if accessible)                      ║"
+      - "║   Phase 2: Promote DR coordinator (gpactivatestandby)        ║"
+      - "║   Phase 3: Wait for FTS to failover segments (automatic)     ║"
+      - "║   Phase 4: Verify cluster and optionally recover             ║"
+      - "╚══════════════════════════════════════════════════════════════╝"
   run_once: true
   tags: [failover, info]
 
+# Pre-flight checks
 - name: Run pre-failover checks
   include_tasks: pre_failover_checks.yml
   when: not whpg_failover_skip_checks
   tags: [failover, checks]
 
-- name: Stop primary site (planned failover)
+# Phase 1: Stop primary site (planned failover only)
+- name: "Phase 1: Stop primary site (if accessible)"
   include_tasks: stop_primary.yml
   when: whpg_failover_mode == 'planned'
   tags: [failover, stop]
 
-- name: Promote standby coordinator
+# Phase 2: Promote standby coordinator
+- name: "Phase 2: Promote DR standby coordinator to primary"
   include_tasks: promote_standby.yml
   tags: [failover, promote]
 
-- name: Activate segment mirrors
-  include_tasks: activate_mirrors.yml
-  tags: [failover, mirrors]
+# Phase 3: Wait for FTS to handle segment failover
+- name: "Phase 3: Wait for FTS to failover segments"
+  include_tasks: wait_for_fts.yml
+  tags: [failover, fts]
 
-- name: Run post-failover verification
+# Phase 4: Post-failover verification
+- name: "Phase 4: Post-failover verification"
   include_tasks: post_failover_verify.yml
   tags: [failover, verify]
-
-- name: Display failover completion summary
-  debug:
-    msg:
-      - "========================================="
-      - "WarehousePG Failover Complete"
-      - "========================================="
-      - "New Primary Coordinator: {{ groups['whpg_dr_coordinator'][0] }}"
-      - "Failover Mode: {{ whpg_failover_mode }}"
-      - ""
-      - "IMPORTANT: Update your application connection strings to point to:"
-      - "  Host: {{ hostvars[groups['whpg_dr_coordinator'][0]].ansible_host }}"
-      - "  Port: {{ whpg_coordinator_port }}"
-      - ""
-      - "Next Steps:"
-      - "  1. Verify application connectivity"
-      - "  2. Monitor cluster health: gpstate -e"
-      - "  3. Plan failback or rebuild of old primary site"
-  run_once: true
-  tags: [failover, summary]
