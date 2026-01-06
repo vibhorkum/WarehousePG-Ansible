@@ -18,12 +18,22 @@
   become_user: gpadmin
   shell: |
     echo "=== Removing standby.signal files to allow segments to start as primaries ==="
-    for dir in /data/mirror/seg*/; do
-      if [ -f "${dir}standby.signal" ]; then
-        echo "Removing ${dir}standby.signal"
-        rm -f "${dir}standby.signal"
+    # Use configured directories or fall back to glob pattern
+    DIRS="{{ whpg_mirror_data_directories | default([]) | join(' ') }}"
+    if [ -z "$DIRS" ]; then
+      DIRS=$(ls -d /data/mirror/seg*/ /data/primary/seg*/ /data1/mirror/ /data2/mirror/ 2>/dev/null || true)
+    fi
+    
+    for dir in $DIRS; do
+      if [ -d "$dir" ]; then
+        for signal in "${dir}/standby.signal" "${dir}standby.signal"; do
+          if [ -f "$signal" ]; then
+            echo "Removing $signal"
+            rm -f "$signal"
+          fi
+        done
       else
-        echo "No standby.signal in ${dir}"
+        echo "No directory: $dir"
       fi
     done
     echo "Done removing standby.signal files"
@@ -49,19 +59,27 @@
   become_user: gpadmin
   shell: |
     echo "=== Cleaning up stale shared memory ==="
+    # Use configured directories or fall back to glob pattern
+    DIRS="{{ whpg_mirror_data_directories | default([]) | join(' ') }}"
+    if [ -z "$DIRS" ]; then
+      DIRS=$(ls -d /data/mirror/seg*/ /data/primary/seg*/ /data1/mirror/ /data2/mirror/ 2>/dev/null || true)
+    fi
+    
     # Remove postmaster.pid files if postgres is not running
-    for dir in /data/mirror/seg*/; do
-      if [ -f "${dir}postmaster.pid" ]; then
-        # Check if the PID is actually running
-        PID=$(head -1 "${dir}postmaster.pid" 2>/dev/null || echo "")
-        if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then
-          echo "Removing stale postmaster.pid in ${dir}"
-          rm -f "${dir}postmaster.pid"
+    for dir in $DIRS; do
+      for pidfile in "${dir}/postmaster.pid" "${dir}postmaster.pid"; do
+        if [ -f "$pidfile" ]; then
+          # Check if the PID is actually running
+          PID=$(head -1 "$pidfile" 2>/dev/null || echo "")
+          if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then
+            echo "Removing stale postmaster.pid: $pidfile"
+            rm -f "$pidfile"
+          fi
         fi
-      fi
+      done
     done
     # Clear any stale shared memory segments
-    for shmid in $(ipcs -m 2>/dev/null | awk '/gpadmin/ {print $2}'); do
+    ipcrm --all=shm 2>/dev/null || for shmid in $(ipcs -m 2>/dev/null | awk '/gpadmin/ {print $2}'); do
       ipcrm -m "$shmid" 2>/dev/null || true
     done
     echo "Shared memory cleanup complete"

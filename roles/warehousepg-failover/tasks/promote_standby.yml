@@ -70,25 +70,40 @@
   become_user: gpadmin
   shell: |
     echo "=== Preparing DR segment mirrors for promotion ==="
-    for dir in /data/mirror/seg*/; do
+    # Use configured directories or fall back to glob pattern
+    DIRS="{{ whpg_mirror_data_directories | default([]) | join(' ') }}"
+    if [ -z "$DIRS" ]; then
+      DIRS=$(ls -d /data/mirror/seg*/ /data/primary/seg*/ /data1/mirror/ /data2/mirror/ 2>/dev/null || true)
+    fi
+    
+    for dir in $DIRS; do
       if [ -d "$dir" ]; then
+        echo "Processing $dir"
         # Remove standby.signal to allow starting as primary
+        if [ -f "${dir}/standby.signal" ]; then
+          echo "  Removing standby.signal"
+          rm -f "${dir}/standby.signal"
+        fi
+        # Also check without trailing slash
         if [ -f "${dir}standby.signal" ]; then
-          echo "Removing ${dir}standby.signal"
+          echo "  Removing standby.signal"
           rm -f "${dir}standby.signal"
         fi
         # Clean up stale postmaster.pid if process not running
-        if [ -f "${dir}postmaster.pid" ]; then
-          PID=$(head -1 "${dir}postmaster.pid" 2>/dev/null || echo "")
-          if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then
-            echo "Removing stale ${dir}postmaster.pid"
-            rm -f "${dir}postmaster.pid"
+        for pidfile in "${dir}/postmaster.pid" "${dir}postmaster.pid"; do
+          if [ -f "$pidfile" ]; then
+            PID=$(head -1 "$pidfile" 2>/dev/null || echo "")
+            if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then
+              echo "  Removing stale postmaster.pid"
+              rm -f "$pidfile"
+            fi
           fi
-        fi
+        done
       fi
     done
     # Clear stale shared memory
-    for shmid in $(ipcs -m 2>/dev/null | awk '/gpadmin/ {print $2}'); do
+    echo "Clearing stale shared memory..."
+    ipcrm --all=shm 2>/dev/null || for shmid in $(ipcs -m 2>/dev/null | awk '/gpadmin/ {print $2}'); do
       ipcrm -m "$shmid" 2>/dev/null || true
     done
     echo "DR segment preparation complete"
@@ -132,13 +147,73 @@
   register: stop_result
   run_once: true
 
+# CRITICAL: Before starting the cluster, we need to ensure DR segments can start
+# The standby.signal removal should have already happened, but double-check
+- name: Final preparation of DR segments before cluster start
+  become: yes
+  become_user: gpadmin
+  shell: |
+    echo "=== Final DR segment preparation ==="
+    # Use configured directories or fall back to glob pattern
+    DIRS="{{ whpg_mirror_data_directories | default([]) | join(' ') }}"
+    if [ -z "$DIRS" ]; then
+      DIRS=$(ls -d /data/mirror/seg*/ /data/primary/seg*/ /data1/mirror/ /data2/mirror/ 2>/dev/null || true)
+    fi
+    
+    for dir in $DIRS; do
+      if [ -d "$dir" ]; then
+        # Remove standby.signal
+        rm -f "${dir}/standby.signal" "${dir}standby.signal" 2>/dev/null || true
+        # Remove stale postmaster.pid
+        for pidfile in "${dir}/postmaster.pid" "${dir}postmaster.pid"; do
+          if [ -f "$pidfile" ]; then
+            PID=$(head -1 "$pidfile" 2>/dev/null || echo "")
+            if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
+              rm -f "$pidfile"
+            fi
+          fi
+        done
+      fi
+    done
+    # Clear shared memory
+    ipcrm --all=shm 2>/dev/null || true
+    echo "DR segments ready"
+  delegate_to: "{{ item }}"
+  loop: "{{ dr_segment_hosts }}"
+  when:
+    - whpg_failover_dr_takeover | default(true)
+    - dr_segment_hosts | length > 0
+  ignore_errors: yes
+
 - name: Start full cluster from new primary
   become: yes
   become_user: gpadmin
   shell: |
     source {{ whpg_base_dir }}/greenplum_path.sh
     export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
-    gpstart -a
+    
+    echo "=== Starting cluster after failover ==="
+    
+    # First, try starting normally
+    # The cluster may take time due to DTX recovery if there were in-flight transactions
+    timeout 300 gpstart -a 2>&1 || {
+      EXIT_CODE=$?
+      echo "gpstart returned: $EXIT_CODE"
+      
+      # If gpstart failed/timed out, the coordinator might still be running
+      # Check if coordinator is accepting connections
+      if pg_isready -h localhost -p {{ whpg_coordinator_port }} -t 5; then
+        echo "Coordinator is running and accepting connections"
+      else
+        echo "Coordinator not ready, attempting recovery start..."
+        # Try starting with skip of standby
+        gpstart -a -y 2>&1 || true
+      fi
+    }
+    
+    # Final check
+    sleep 5
+    pg_isready -h localhost -p {{ whpg_coordinator_port }} -t 10 && echo "Cluster started successfully" || echo "Cluster may still be starting"
   delegate_to: "{{ dr_coordinator_host }}"
   register: start_result
   failed_when: false
@@ -147,6 +222,35 @@
 - name: Display cluster start result
   debug:
     msg: "{{ start_result.stdout_lines }}"
+  run_once: true
+
+# If cluster start timed out due to DTX recovery, wait and check again
+- name: Wait for DTX recovery to complete (may take a few minutes)
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    
+    echo "Checking cluster readiness..."
+    for i in $(seq 1 30); do
+      if psql -d template1 -t -c "SELECT 1;" 2>/dev/null | grep -q 1; then
+        echo "Cluster is ready (attempt $i)"
+        exit 0
+      fi
+      echo "Waiting for cluster... (attempt $i/30)"
+      sleep 10
+    done
+    echo "Cluster may still be in recovery"
+    exit 1
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: cluster_ready
+  failed_when: false
+  run_once: true
+
+- name: Display cluster readiness
+  debug:
+    msg: "{{ cluster_ready.stdout_lines }}"
   run_once: true
 
 - name: Wait for promoted coordinator to be ready

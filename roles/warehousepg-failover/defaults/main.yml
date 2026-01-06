@@ -19,6 +19,12 @@ whpg_failover_notify_applications: false
 whpg_coordinator_port: 5432
 whpg_coordinator_data_directory: /data/coordinator/gpseg-1
 
+# Segment data directories - used for DR takeover cleanup
+# These should match your DR site's mirror directories
+whpg_mirror_data_directories:
+  - "/data/mirror/seg1"
+  - "/data/mirror/seg2"
+
 # Base directory
 whpg_base_dir: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
 
