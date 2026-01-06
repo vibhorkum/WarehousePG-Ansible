@@ -321,3 +321,138 @@
   debug:
     var: fts_probe.stdout_lines
   run_once: true
+
+# ============================================================
+# PHASE: Recover old primary segments as new mirrors using gprecoverseg
+# This will rebuild the old primary site as mirrors for the new DR-based cluster
+# ============================================================
+- name: Check if segment recovery is possible
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    
+    echo "=== Checking segment recovery status ==="
+    
+    # Count down segments
+    DOWN_COUNT=$(psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE status = 'd' AND content >= 0;" | tr -d ' ')
+    echo "Down segments: $DOWN_COUNT"
+    
+    # Show which segments are down
+    if [ "$DOWN_COUNT" -gt 0 ]; then
+      echo ""
+      echo "Down segment details:"
+      psql -d template1 -c "SELECT content, role, preferred_role, hostname, port, datadir FROM gp_segment_configuration WHERE status = 'd' AND content >= 0 ORDER BY content;"
+    fi
+    
+    echo "$DOWN_COUNT"
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: recovery_check
+  changed_when: false
+  run_once: true
+
+- name: Attempt segment recovery with gprecoverseg
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    
+    echo "=== Attempting segment recovery with gprecoverseg ==="
+    echo ""
+    
+    # First try incremental recovery
+    echo "Attempting incremental recovery..."
+    if gprecoverseg -a 2>&1; then
+      echo "Incremental recovery succeeded"
+    else
+      echo "Incremental recovery failed, this is expected if directories were renamed"
+      echo ""
+      echo "Attempting full recovery (gprecoverseg -aF)..."
+      echo "This will rebuild segments from scratch using the active mirrors"
+      
+      # Full recovery - rebuilds from scratch
+      gprecoverseg -aF 2>&1 || {
+        echo ""
+        echo "Full recovery also failed."
+        echo "This may be because:"
+        echo "  1. Old primary hosts are not reachable"
+        echo "  2. SSH connectivity issues"
+        echo "  3. Disk space issues on old primary hosts"
+        echo ""
+        echo "Manual recovery steps:"
+        echo "  1. Ensure old primary hosts are reachable from DR coordinator"
+        echo "  2. Ensure gpadmin can SSH to old primary hosts"
+        echo "  3. Run: gprecoverseg -aF manually"
+      }
+    fi
+    
+    echo ""
+    echo "=== Current segment status after recovery attempt ==="
+    gpstate -e
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: gprecoverseg_result
+  when: recovery_check.stdout_lines | last | int > 0
+  run_once: true
+  ignore_errors: yes
+
+- name: Display gprecoverseg result
+  debug:
+    msg: "{{ gprecoverseg_result.stdout_lines if gprecoverseg_result is defined and gprecoverseg_result.stdout_lines is defined else 'No segment recovery needed - all segments are up' }}"
+  run_once: true
+
+- name: Wait for segment recovery to complete
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    
+    echo "Waiting for segment recovery/resync to complete..."
+    for i in $(seq 1 60); do
+      # Check if any segments are in resync mode
+      RESYNCING=$(psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE mode = 'r' AND content >= 0;" | tr -d ' ')
+      
+      if [ "$RESYNCING" -eq 0 ]; then
+        echo "All segments are synchronized (attempt $i)"
+        gpstate -e
+        exit 0
+      fi
+      
+      echo "Segments still resyncing: $RESYNCING (attempt $i/60)"
+      sleep 10
+    done
+    
+    echo "Warning: Segment resync still in progress after 10 minutes"
+    gpstate -e
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: resync_wait
+  when: 
+    - gprecoverseg_result is defined
+    - gprecoverseg_result.changed | default(false)
+  run_once: true
+  ignore_errors: yes
+
+- name: Display final cluster status
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    
+    echo "=== Final Cluster Status ==="
+    echo ""
+    gpstate -s
+    echo ""
+    echo "=== Segment Configuration ==="
+    psql -d template1 -c "SELECT content, role, preferred_role, status, mode, hostname, port FROM gp_segment_configuration ORDER BY content, role;"
+  delegate_to: "{{ dr_coordinator_host }}"
+  register: final_status
+  changed_when: false
+  run_once: true
+
+- name: Display final status
+  debug:
+    var: final_status.stdout_lines
+  run_once: true

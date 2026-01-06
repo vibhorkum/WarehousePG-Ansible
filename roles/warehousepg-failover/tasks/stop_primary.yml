@@ -6,6 +6,51 @@
     primary_is_accessible: "{{ primary_is_accessible | default(true) }}"
   run_once: true
 
+- name: Get primary segment hosts
+  set_fact:
+    primary_segment_hosts: "{{ groups['whpg_primary_segments'] | default([]) }}"
+  run_once: true
+
+- name: Check connectivity to primary coordinator
+  become: yes
+  become_user: gpadmin
+  shell: |
+    timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=3 {{ groups['whpg_primary_coordinator'][0] }} "echo reachable" 2>/dev/null || echo "unreachable"
+  register: primary_coord_check
+  delegate_to: localhost
+  changed_when: false
+  failed_when: false
+  run_once: true
+
+- name: Check connectivity to primary segments
+  become: yes
+  become_user: gpadmin
+  shell: |
+    timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=3 {{ item }} "echo reachable" 2>/dev/null || echo "unreachable"
+  register: primary_seg_check
+  delegate_to: localhost
+  loop: "{{ primary_segment_hosts }}"
+  changed_when: false
+  failed_when: false
+  run_once: true
+
+- name: Set primary accessibility status
+  set_fact:
+    primary_coord_accessible: "{{ 'reachable' in (primary_coord_check.stdout | default('')) }}"
+    primary_segments_accessible: "{{ primary_seg_check.results | selectattr('stdout', 'search', 'reachable') | list | length == primary_segment_hosts | length }}"
+  run_once: true
+
+- name: Display primary site accessibility
+  debug:
+    msg:
+      - "Primary coordinator accessible: {{ primary_coord_accessible }}"
+      - "Primary segments accessible: {{ primary_segments_accessible }}"
+      - "DR takeover mode: {{ whpg_failover_dr_takeover | default(true) }}"
+  run_once: true
+
+# ============================================================
+# PHASE 1: Stop primary coordinator (if accessible)
+# ============================================================
 - name: Check if primary coordinator is running
   become: yes
   become_user: gpadmin
@@ -17,7 +62,7 @@
   register: primary_running
   changed_when: false
   ignore_errors: yes
-  when: primary_is_accessible
+  when: primary_coord_accessible
   run_once: true
 
 - name: Gracefully stop primary cluster
@@ -30,7 +75,7 @@
   delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
   register: stop_primary
   when:
-    - primary_is_accessible
+    - primary_coord_accessible
     - primary_running is succeeded
     - "'running' in primary_running.stdout.lower() or primary_running.rc == 0"
   run_once: true
@@ -49,90 +94,124 @@
     - stop_primary.changed
   run_once: true
 
-- name: Verify primary is stopped
+# ============================================================
+# PHASE 2: Force stop and rename primary segment directories (if accessible)
+# This prevents segments from being started by gpstart -a after failover
+# ============================================================
+- name: Force stop primary segment processes and rename directories
   become: yes
   become_user: gpadmin
   shell: |
-    source {{ whpg_base_dir }}/greenplum_path.sh
-    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
-    pg_isready -h localhost -p {{ whpg_coordinator_port }}
-  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
-  register: primary_stopped
-  failed_when: primary_stopped.rc == 0
-  changed_when: false
-  when: primary_is_accessible
-  run_once: true
-  ignore_errors: yes
-
-- name: Display primary status after stop
-  debug:
-    msg: "Primary coordinator has been stopped successfully"
-  when:
-    - primary_is_accessible
-    - primary_stopped is defined
-    - primary_stopped.rc != 0
-  run_once: true
-
-# CRITICAL: For DR takeover, we must stop primary segments AND prevent them from restarting
-# This must happen BEFORE the gpstart command runs after gpactivatestandby
-- name: Stop primary site segment processes (for DR takeover)
-  become: yes
-  become_user: gpadmin
-  shell: |
-    echo "=== Stopping primary segment processes ==="
+    echo "=== Force stopping primary segment processes ==="
+    
     # Kill all postgres processes for primary segments
-    pkill -9 -f 'postgres.*-D /data/primary' || true
+    pkill -9 -f 'postgres.*-D /data/primary' 2>/dev/null || true
     sleep 2
-    # Double check and kill any remaining
-    pkill -9 -f 'postgres.*-D /data/primary' || true
+    pkill -9 -f 'postgres.*-D /data/primary' 2>/dev/null || true
+    
     # Verify segments are stopped
-    if pgrep -f 'postgres.*-D /data/primary' > /dev/null; then
+    if pgrep -f 'postgres.*-D /data/primary' > /dev/null 2>&1; then
       echo "WARNING: Some segment processes may still be running"
       pgrep -af 'postgres.*-D /data/primary'
     else
       echo "All primary segment processes stopped"
     fi
-  delegate_to: "{{ groups['whpg_primary_segments'][0] }}"
-  register: stop_segments
+    
+    echo ""
+    echo "=== Renaming primary segment directories ==="
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    
+    # Rename each segment directory to prevent gpstart from using it
+    for dir in {{ whpg_data_directories | default(['/data/primary/seg1', '/data/primary/seg2']) | join(' ') }}; do
+      if [ -d "$dir" ]; then
+        NEW_NAME="${dir}.failover_${TIMESTAMP}"
+        echo "Renaming $dir -> $NEW_NAME"
+        mv "$dir" "$NEW_NAME"
+        # Create empty directory to avoid mount point issues
+        mkdir -p "$dir"
+        touch "$dir/.failover_placeholder"
+        echo "Created placeholder at $dir"
+      else
+        echo "Directory not found: $dir"
+      fi
+    done
+    
+    echo ""
+    echo "Primary segment directories renamed successfully"
+    echo "To recover, use: gprecoverseg -aF (after failover is complete)"
+  delegate_to: "{{ item }}"
+  loop: "{{ primary_segment_hosts }}"
+  register: stop_and_rename_segments
   when:
     - whpg_failover_dr_takeover | default(true)
-    - primary_is_accessible
-  run_once: true
+    - primary_segments_accessible
   ignore_errors: yes
 
-- name: Display segment stop result
+- name: Display segment stop and rename result
   debug:
-    msg: "{{ stop_segments.stdout_lines if stop_segments is defined and stop_segments.stdout_lines is defined else 'Segment stop skipped' }}"
+    msg: "{{ item.stdout_lines if item.stdout_lines is defined else 'Skipped' }}"
+  loop: "{{ stop_and_rename_segments.results | default([]) }}"
+  when:
+    - whpg_failover_dr_takeover | default(true)
+    - stop_and_rename_segments is defined
   run_once: true
-  when: whpg_failover_dr_takeover | default(true)
 
-# CRITICAL: Prevent primary segments from restarting by renaming their data directories
-# This ensures gpstart -a won't be able to start them
-- name: Disable primary segments to prevent restart during failover
+# ============================================================
+# PHASE 3: Rename primary coordinator directory (if accessible)
+# ============================================================
+- name: Rename primary coordinator directory
   become: yes
   become_user: gpadmin
   shell: |
-    echo "=== Disabling primary segments to prevent restart ==="
-    # Create a marker file that indicates failover is in progress
-    for dir in /data/primary/seg*/gpseg*; do
-      if [ -d "$dir" ]; then
-        touch "${dir}/failover.disabled"
-        echo "Created failover marker in $dir"
-      fi
-    done
-    echo "Primary segments disabled"
-  delegate_to: "{{ groups['whpg_primary_segments'][0] }}"
+    echo "=== Renaming primary coordinator directory ==="
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    COORD_DIR="{{ whpg_coordinator_data_directory }}"
+    
+    if [ -d "$COORD_DIR" ]; then
+      NEW_NAME="${COORD_DIR}.failover_${TIMESTAMP}"
+      echo "Renaming $COORD_DIR -> $NEW_NAME"
+      mv "$COORD_DIR" "$NEW_NAME"
+      mkdir -p "$COORD_DIR"
+      touch "$COORD_DIR/.failover_placeholder"
+      echo "Primary coordinator directory renamed"
+    else
+      echo "Coordinator directory not found: $COORD_DIR"
+    fi
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: rename_coordinator
   when:
     - whpg_failover_dr_takeover | default(true)
-    - primary_is_accessible
+    - primary_coord_accessible
   run_once: true
   ignore_errors: yes
 
-- name: Wait for FTS to detect segment failures
+- name: Display coordinator rename result
+  debug:
+    msg: "{{ rename_coordinator.stdout_lines if rename_coordinator is defined and rename_coordinator.stdout_lines is defined else 'Coordinator rename skipped (not accessible)' }}"
+  run_once: true
+
+# ============================================================
+# PHASE 4: Handle unreachable primary scenario
+# ============================================================
+- name: Display unreachable primary warning
+  debug:
+    msg:
+      - "========================================="
+      - "WARNING: Primary site is NOT accessible"
+      - "========================================="
+      - "Primary coordinator reachable: {{ primary_coord_accessible }}"
+      - "Primary segments reachable: {{ primary_segments_accessible }}"
+      - ""
+      - "Proceeding with DR failover without stopping primary."
+      - "After failover completes:"
+      - "  1. When primary site comes back online, STOP all processes manually"
+      - "  2. Rename or remove the data directories"
+      - "  3. Run: gprecoverseg -aF to rebuild as mirrors"
+  when: not primary_coord_accessible or not primary_segments_accessible
+  run_once: true
+
+- name: Wait for changes to settle
   pause:
-    seconds: 15
-  when:
-    - whpg_failover_dr_takeover | default(true)
-    - stop_segments is defined
-    - stop_segments.changed | default(false)
+    seconds: 5
+  when: whpg_failover_dr_takeover | default(true)
   run_once: true
