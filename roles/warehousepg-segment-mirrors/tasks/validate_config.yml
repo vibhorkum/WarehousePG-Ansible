@@ -1,0 +1,71 @@
+---
+# ============================================================
+# Validate Mirror Configuration
+# ============================================================
+
+- name: Validate mirror mode
+  assert:
+    that:
+      - effective_mirror_mode in ['same_host', 'spread', 'remote_hosts', 'group']
+    fail_msg: "Invalid whpg_mirror_mode: {{ effective_mirror_mode }}. Valid: same_host, spread, remote_hosts, group"
+    success_msg: "Mirror mode '{{ effective_mirror_mode }}' is valid"
+
+- name: Check primary coordinator group exists
+  assert:
+    that:
+      - groups['whpg_primary_coordinator'] is defined
+      - groups['whpg_primary_coordinator'] | length > 0
+    fail_msg: "Primary coordinator group is not defined or empty"
+    success_msg: "Primary coordinator group validated"
+
+- name: Check primary segments group exists
+  assert:
+    that:
+      - groups['whpg_primary_segments'] is defined
+      - groups['whpg_primary_segments'] | length > 0
+    fail_msg: "Primary segments group is not defined or empty"
+    success_msg: "Primary segments group validated: {{ groups['whpg_primary_segments'] | length }} hosts"
+
+- name: Check mirror segments group for remote_hosts mode
+  assert:
+    that:
+      - groups['whpg_mirror_segments'] is defined
+      - groups['whpg_mirror_segments'] | length > 0
+      - groups['whpg_mirror_segments'] | length == groups['whpg_primary_segments'] | length
+    fail_msg: "Mirror segments group required for remote_hosts mode and must match primary segment count"
+    success_msg: "Mirror segments group validated: {{ groups['whpg_mirror_segments'] | length }} hosts"
+  when: effective_mirror_mode == 'remote_hosts'
+
+- name: Check spread mode has multiple segment hosts
+  assert:
+    that:
+      - groups['whpg_primary_segments'] | length >= 2
+    fail_msg: "Spread mode requires at least 2 segment hosts for mirror distribution"
+    success_msg: "Spread mode validated: {{ groups['whpg_primary_segments'] | length }} hosts available"
+  when: effective_mirror_mode == 'spread'
+
+- name: Stat postgresql.conf for coordinator
+  stat:
+    path: "{{ whpg_coordinator_data_directory }}/postgresql.conf"
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: postgresql_conf_stat
+
+- name: Check cluster is running
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstate -s
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: cluster_state
+  changed_when: false
+  failed_when:
+    - cluster_state.rc != 0
+    - "'Coordinator' not in cluster_state.stdout | default('')"
+  when:
+    - postgresql_conf_stat.stat.exists
+
+- name: Display cluster status
+  debug:
+    msg: "Cluster is running and ready for mirror setup"

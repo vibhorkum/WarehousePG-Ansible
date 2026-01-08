@@ -1,0 +1,74 @@
+---
+# ============================================================
+# Verify Mirror Status
+# ============================================================
+
+
+- name: Stat postgresql.conf for coordinator
+  # Coordinator-side check: use whpg_coordinator_data_directory for postgresql.conf
+  stat:
+    path: "{{ whpg_coordinator_data_directory }}/postgresql.conf"
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: postgresql_conf_stat
+
+- name: Check mirror synchronization status
+  become: yes
+  become_user: gpadmin
+  # Coordinator-side command: use whpg_coordinator_data_directory for COORDINATOR_DATA_DIRECTORY
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstate -m
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: mirror_status
+  changed_when: false
+  when:
+    - postgresql_conf_stat.stat.exists
+
+- name: Display mirror status
+  debug:
+    var: mirror_status.stdout_lines
+
+- name: Check segment configuration
+  become: yes
+  become_user: gpadmin
+  # Coordinator-side command: use whpg_coordinator_data_directory for COORDINATOR_DATA_DIRECTORY
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    psql -d template1 -c "
+      SELECT content, role, preferred_role, mode, status, hostname, port, datadir
+      FROM gp_segment_configuration
+      WHERE content >= 0
+      ORDER BY content, role;
+    "
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: segment_config
+  changed_when: false
+
+- name: Display segment configuration
+  debug:
+    var: segment_config.stdout_lines
+
+- name: Count out-of-sync mirrors
+  become: yes
+  become_user: gpadmin
+  # Coordinator-side command: use whpg_coordinator_data_directory for COORDINATOR_DATA_DIRECTORY
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    psql -d template1 -t -c "
+      SELECT count(*) FROM gp_segment_configuration
+      WHERE role = 'm' AND content >= 0 AND mode != 's';
+    "
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: out_of_sync_count
+  changed_when: false
+
+- name: Assert all mirrors are synchronized
+  assert:
+    that:
+      - out_of_sync_count.stdout | trim | int == 0
+    fail_msg: "Warning: {{ out_of_sync_count.stdout | trim }} mirror(s) are not in sync mode"
+    success_msg: "All segment mirrors are in sync mode"
+  ignore_errors: yes

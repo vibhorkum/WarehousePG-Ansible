@@ -302,12 +302,12 @@
           - "- PostgreSQL lock files removed"
           - "- Configuration files cleaned"
           - ""
-          - "Server is ready for fresh deployment"
 
-  handlers:
-    - name: reload systemd
-      systemd:
-        daemon_reload: yes
+          - "Greenplum coordinator and standby data directories removed."
+          - "Mirror segment directories cleaned."
+
+
+# These tasks are already covered in previous cleanup plays. Remove this duplicate block.
 
 - name: Final Cleanup Summary
   hosts: localhost
@@ -324,7 +324,7 @@
           - ""
           - "All WarehousePG components have been removed from:"
           - "  - Primary Site: {{ groups['whpg_primary_site'] | join(', ') }}"
-          - "  - DR Site: {{ groups['whpg_dr_site'] | join(', ') }}"
+          - "  - DR Site: {% if groups['whpg_dr_site'] is defined %}{{ groups['whpg_dr_site'] | join(', ') }}{% else %}N/A{% endif %}"
           - ""
           - "Verification completed on all hosts."
           - "Check the 'Cleanup Verification' output above for details."

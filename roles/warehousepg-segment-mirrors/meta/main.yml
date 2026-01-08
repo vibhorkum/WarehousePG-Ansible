@@ -1,0 +1,24 @@
+---
+galaxy_info:
+  author: EDB
+  description: Configure segment mirrors for WarehousePG cluster
+  company: EnterpriseDB
+  license: Apache-2.0
+  min_ansible_version: "2.9"
+  platforms:
+    - name: EL
+      versions:
+        - "8"
+        - "9"
+    - name: Rocky
+      versions:
+        - "8"
+        - "9"
+  galaxy_tags:
+    - database
+    - greenplum
+    - warehousepg
+    - mirrors
+    - ha
+
+dependencies: []

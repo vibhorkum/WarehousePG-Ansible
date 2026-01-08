@@ -1,0 +1,101 @@
+---
+# ============================================================
+# Setup Segment Mirrors - Spread Mode
+# ============================================================
+# Mirrors are spread across primary segment hosts
+# Host A's mirrors go to Host B, Host B's mirrors go to Host C, etc.
+
+- name: Set mirror target hosts (spread across primaries)
+  set_fact:
+    mirror_target_hosts: "{{ groups['whpg_primary_segments'] }}"
+  run_once: true
+
+- name: Display spread mirror setup
+  debug:
+    msg:
+      - "Setting up mirrors in spread mode"
+      - "Segment hosts: {{ mirror_target_hosts }}"
+      - "Each host's primaries will have mirrors on the next host in rotation"
+  run_once: true
+
+- name: Create mirror directories on all segment hosts
+  become: yes
+  file:
+    path: "{{ item.1 }}"
+    state: directory
+    owner: gpadmin
+    group: gpadmin
+    mode: '0755'
+  loop: "{{ groups['whpg_primary_segments'] | product(whpg_mirror_data_directories) | list }}"
+  delegate_to: "{{ item.0 }}"
+
+- name: Create mirror configuration directory
+  become: yes
+  become_user: gpadmin
+  file:
+    path: "{{ whpg_admin_home_dir }}/gpconfigs"
+    state: directory
+    owner: gpadmin
+    group: gpadmin
+    mode: '0755'
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+
+- name: Generate mirror configuration file (spread)
+  become: yes
+  become_user: gpadmin
+  template:
+    src: mirror_config_spread.j2
+    dest: "{{ whpg_admin_home_dir }}/gpconfigs/mirror_config"
+    owner: gpadmin
+    group: gpadmin
+    mode: '0644'
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+
+- name: Display mirror configuration
+  become: yes
+  become_user: gpadmin
+  shell: cat "{{ whpg_admin_home_dir }}/gpconfigs/mirror_config"
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: mirror_config_content
+  changed_when: false
+
+- name: Show mirror configuration
+  debug:
+    var: mirror_config_content.stdout_lines
+
+- name: Check if segment mirrors already exist
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    psql -d template1 -t -c "SELECT count(*) FROM gp_segment_configuration WHERE role='m' AND content >= 0;"
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: mirror_count
+  changed_when: false
+
+- name: Debug mirror count
+  debug:
+    msg: "Existing segment mirror count: {{ mirror_count.stdout | trim }}"
+
+- name: Add segment mirrors
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpaddmirrors -i {{ whpg_admin_home_dir }}/gpconfigs/mirror_config -a
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: add_mirrors
+  when: mirror_count.stdout | trim | int == 0
+  failed_when:
+    - add_mirrors.rc != 0
+    - "'already exist' not in add_mirrors.stderr | default('')"
+
+- name: Display mirror add result
+  debug:
+    msg: "{{ add_mirrors.stdout_lines if add_mirrors.changed | default(false) else 'Mirrors already configured or skipped' }}"
+
+- name: Include recovery tasks
+  include_tasks: recover_mirrors.yml
+  when: whpg_mirror_auto_recover | default(true)

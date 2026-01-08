@@ -30,10 +30,15 @@
 # Get all hosts from all WHPG groups
 - name: Build list of all WHPG hosts
   set_fact:
-    all_whpg_hosts: "{{ (groups['whpg_primary_coordinator'] | default([])) + 
-                        (groups['whpg_primary_segments'] | default([])) + 
-                        (groups['whpg_dr_coordinator'] | default([])) + 
-                        (groups['whpg_dr_segments'] | default([])) }}"
+    all_whpg_hosts: >-
+      {{
+        (groups['whpg_primary_coordinator'] | default([])) +
+        (groups['whpg_primary_segments']   | default([])) +
+        (groups['whpg_dr_coordinator']     | default([])) +
+        (groups['whpg_dr_segments']        | default([])) +
+        (groups['whpg_mirror_segments']    | default([])) +
+        (groups['whpg_coordinator_standby']| default([]))
+      }}
 
 # Identify same-site hosts based on site_name variable (not ansible_play_hosts_all)
 # This correctly handles cases where only coordinator is in the play but segments are same-site

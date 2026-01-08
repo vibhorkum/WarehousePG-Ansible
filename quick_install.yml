@@ -1,44 +1,26 @@
----
-# Quick Install Playbook: Complete WarehousePG Installation
-# This playbook runs all steps in sequence for a quick deployment
-#
-# Usage:
-#   ansible-playbook -i inventory.yml quick_install.yml
-#   ansible-playbook -i test_inventory.yml quick_install.yml
-#
-# SSH Configuration:
-#   Make sure ansible_user and ansible_ssh_private_key_file are set in your inventory
-#   Example: ansible-playbook -i inventory.yml quick_install.yml -u rocky --private-key ~/.ssh/mykey.pem
-#
-# Variables:
-#   edb_subscription_token: Your EDB subscription token (required)
-#   whpg_enable_mirrors: Enable mirror segments (default: false)
-#   whpg_use_dr_site_mirrors: Use DR site for mirrors (default: false)
 
-- name: WarehousePG Complete Installation - Primary Site
+# 1. OS Config, Install, Storage (Primary Site)
+- name: WarehousePG OS Config, Install, Storage (Primary Site)
   hosts: whpg_primary_site
   become: yes
-  
+  any_errors_fatal: true
   vars:
-    # EDB Repository Token (REQUIRED - update with your token)
     edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"
-    
-    # Storage configuration for single-disk setup
-    # These paths will be created on your root filesystem
     whpg_storage_base: "/data"
     whpg_coordinator_storage: "/data/coordinator"
     whpg_primary_storage: "/data/primary"
     whpg_mirror_storage: "/data/mirror"
     whpg_force_create: true
-    
-    # Mirror configuration (optional)
-    whpg_enable_mirrors: false
+    whpg_enable_mirrors: true
     whpg_use_dr_site_mirrors: false
-  
+    whpg_mirror_mode: "group"
+    whpg_coordinator_standby_host: "{{ groups['whpg_primary_coordinator'][0] }}"
+    whpg_coordinator_standby_data_directory: "/data/standby_coordinator/gpseg-1"
+    whpg_coordinator_standby_port: 5433
   pre_tasks:
     - name: Display installation start
       ansible.builtin.debug:
-        msg: 
+        msg:
           - "======================================================"
           - "Starting WarehousePG installation on {{ inventory_hostname }}"
           - "======================================================"
@@ -48,27 +30,19 @@
           - "Mirrors enabled: {{ whpg_enable_mirrors }}"
           - "DR site mirrors: {{ whpg_use_dr_site_mirrors }}"
           - "======================================================"
-
-    - name: Set the EDB subscription token fact
-      set_fact:
+    - name: Add the edb_subscription_token
+      ansible.builtin.set_fact:
         edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"
-        whpg_force_create: true
 
   roles:
-    # Step 1: OS Configuration and Tuning
     - role: warehousepg-os-config
       tags: [os-config, config]
-      
-    # Step 2: Install WarehousePG packages
     - role: warehousepg-install
       vars:
         edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"
       tags: [install, packages]
-      
-    # Step 3: Create storage directories
     - role: warehousepg-storage
       vars:
-        # Pass segment data directories so storage role creates them
         whpg_data_directories:
           - "/data/primary/seg1"
           - "/data/primary/seg2"
@@ -76,7 +50,6 @@
           - "/data/mirror/seg1"
           - "/data/mirror/seg2"
       tags: [storage]
-
   post_tasks:
     - name: Display primary site installation summary
       ansible.builtin.debug:
@@ -89,76 +62,26 @@
           - "Storage created: ✓"
           - "======================================================"
 
-# DR Site Installation (if using DR site mirrors)
-- name: WarehousePG Installation - DR Site
-  hosts: whpg_dr_site
-  become: yes
-  
-  vars:
-    edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"
-  
-  pre_tasks:
-    - name: Display DR site installation start
-      ansible.builtin.debug:
-        msg:
-          - "======================================================"
-          - "Starting DR site installation on {{ inventory_hostname }}"
-          - "======================================================"
-      when: whpg_use_dr_site_mirrors | default(false)
-  
-  roles:
-    # Install on DR site for mirror segments
-    - role: warehousepg-os-config
-      tags: [os-config, config]
-      when: whpg_use_dr_site_mirrors | default(false)
-      
-    - role: warehousepg-install
-      tags: [install, packages]
-      when: whpg_use_dr_site_mirrors | default(false)
-      
-    - role: warehousepg-storage
-      tags: [storage]
-      when: whpg_use_dr_site_mirrors | default(false)
-  
-  post_tasks:
-    - name: Display DR site installation summary
-      ansible.builtin.debug:
-        msg:
-          - "======================================================"
-          - "DR site installation completed on {{ inventory_hostname }}"
-          - "======================================================"
-      when: whpg_use_dr_site_mirrors | default(false)
 
-# Cluster Initialization (runs only on coordinator)
-- name: Initialize WarehousePG Cluster
+# 2. Cluster Initialization (Coordinator/Segments)
+- name: Initialize WarehousePG Cluster (Coordinator/Segments)
   hosts: whpg_primary_coordinator
   become: yes
-  
+  any_errors_fatal: true
   vars:
-    # Data directories for primary segments
-    # For single-disk setup, use subdirectories under /data
     whpg_coordinator_directory: "/data/coordinator"
     whpg_data_directories:
       - "/data/primary/seg1"
       - "/data/primary/seg2"
-    
-    # Mirror directories (used if mirrors are enabled)
     whpg_mirror_data_directories:
       - "/data/mirror/seg1"
       - "/data/mirror/seg2"
-    
-    # Mirror configuration
-    whpg_enable_mirrors: false
+    whpg_enable_mirrors: true
     whpg_use_dr_site_mirrors: false
     whpg_mirror_port_base: 7000
-    whpg_mirror_mode: "spread"
-    
-    # Standby coordinator (optional)
+    whpg_mirror_mode: "group"
     whpg_standby_coordinator_hostname: ""
-    
-    # Timezone
     whpg_timezone: "US/Pacific"
-  
   pre_tasks:
     - name: Display initialization start
       ansible.builtin.debug:
@@ -171,12 +94,86 @@
           - "DR site mirrors: {{ whpg_use_dr_site_mirrors }}"
           - "Timezone: {{ whpg_timezone }}"
           - "======================================================"
-  
   roles:
     - role: warehousepg-init
       tags: [init, cluster-init]
-  
   post_tasks:
+    - name: Display cluster initialization summary
+      ansible.builtin.debug:
+        msg:
+          - "======================================================"
+          - "Cluster initialization completed on {{ inventory_hostname }}"
+          - "======================================================"
+
+
+# 3. Segment Mirrors (if enabled)
+- name: Setup Segment Mirrors
+  hosts: whpg_primary_site
+  become: yes
+  any_errors_fatal: true
+  roles:
+    - role: warehousepg-segment-mirrors
+      tags: [mirrors]
+      when: whpg_enable_mirrors | default(false)
+
+
+# 4. Coordinator Standby (if configured)
+- name: Setup Coordinator Standby
+  hosts: whpg_coordinator_standby
+  become: yes
+  any_errors_fatal: true
+  roles:
+    - role: warehousepg-coordinator-standby
+      tags: [coordinator-standby]
+      when: whpg_coordinator_standby_host is defined and whpg_coordinator_standby_host != ''
+
+ 
+- name: WarehousePG Installation - DR Site
+  hosts: whpg_dr_site
+  become: yes
+  any_errors_fatal: true
+  vars:
+    edb_subscription_token: "{{ edb_subscription_token | default(lookup('env', 'EDB_SUBSCRIPTION_TOKEN')) }}"
+  pre_tasks:
+    - name: Display DR site installation start
+      ansible.builtin.debug:
+        msg:
+          - "======================================================"
+          - "Starting DR site installation on {{ inventory_hostname }}"
+          - "======================================================"
+      when: whpg_use_dr_site_mirrors | default(false)
+  roles:
+    - role: warehousepg-os-config
+      tags: [os-config, config]
+      when: whpg_use_dr_site_mirrors | default(false)
+    - role: warehousepg-install
+      vars:
+        edb_subscription_token: "{{ edb_subscription_token | default(lookup('env', 'EDB_SUBSCRIPTION_TOKEN')) }}"
+      tags: [install, packages]
+      when: whpg_use_dr_site_mirrors | default(false)
+    - role: warehousepg-storage
+      tags: [storage]
+      when: whpg_use_dr_site_mirrors | default(false)
+  post_tasks:
+    - name: Display DR site installation summary
+      ansible.builtin.debug:
+        msg:
+          - "======================================================"
+          - "DR site installation completed on {{ inventory_hostname }}"
+          - "======================================================"
+      when: whpg_use_dr_site_mirrors | default(false)
+
+ 
+- name: Display Complete Installation Summary
+  hosts: whpg_primary_coordinator
+  gather_facts: no
+  pre_tasks:
+    - name: Ensure summary vars are defined
+      ansible.builtin.set_fact:
+        whpg_enable_mirrors: "{{ whpg_enable_mirrors | default(false) }}"
+        whpg_use_dr_site_mirrors: "{{ whpg_use_dr_site_mirrors | default(false) }}"
+        whpg_timezone: "US/Pacific"
+  tasks:
     - name: Display complete installation summary
       ansible.builtin.debug:
         msg:

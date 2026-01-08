@@ -1,0 +1,46 @@
+---
+# Ensure gpadmin user and passwordless SSH on standby host
+- name: Ensure gpadmin user exists on standby host
+  become: yes
+  user:
+    name: gpadmin
+    home: /home/gpadmin
+    shell: /bin/bash
+    system: yes
+    create_home: yes
+    state: present
+  delegate_to: "{{ whpg_coordinator_standby_host }}"
+
+- name: Ensure .ssh directory exists for gpadmin on standby host
+  become: yes
+  file:
+    path: /home/gpadmin/.ssh
+    state: directory
+    owner: gpadmin
+    group: gpadmin
+    mode: '0700'
+  delegate_to: "{{ whpg_coordinator_standby_host }}"
+
+- name: Generate SSH key for gpadmin on standby host if not present
+  become: yes
+  become_user: gpadmin
+  openssh_keypair:
+    path: /home/gpadmin/.ssh/id_rsa
+    type: rsa
+    size: 4096
+    state: present
+    force: no
+  delegate_to: "{{ whpg_coordinator_standby_host }}"
+
+- name: Set correct permissions on SSH private key for gpadmin on standby host
+  become: yes
+  file:
+    path: /home/gpadmin/.ssh/id_rsa
+    owner: gpadmin
+    group: gpadmin
+    mode: '0600'
+  delegate_to: "{{ whpg_coordinator_standby_host }}"
+
+# Main tasks for creating a coordinator standby
+- name: Include standby creation logic
+  include_tasks: create_standby.yml

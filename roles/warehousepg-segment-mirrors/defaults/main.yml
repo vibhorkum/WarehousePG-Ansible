@@ -1,0 +1,57 @@
+---
+# ============================================================
+# WarehousePG Segment Mirror Role - Default Variables
+# ============================================================
+
+# Enable segment mirrors
+whpg_enable_segment_mirrors: true
+
+# ============================================================
+# Mirror Mode Configuration
+# ============================================================
+## gpinitsystem valid values: 'group' (mirrors on same servers as primaries), 'spread' (mirrors spread across hosts)
+# 'group'        - Mirrors on same servers as primaries (different port/dir)
+# 'spread'       - Mirrors spread across primary segment hosts
+# 'remote_hosts' - Mirrors on separate dedicated hosts (handled outside gpinitsystem)
+whpg_mirror_mode: "group"
+
+# ============================================================
+# Mirror Port Configuration
+# ============================================================
+# Base port for mirror segments
+# For same_host: mirrors use port_base + segment_index (7000, 7001, etc.)
+# For remote_hosts: can use same as primary port base if on dedicated hosts
+whpg_mirror_port_base: 7000
+
+# ============================================================
+# Mirror Data Directories
+# ============================================================
+# Directories for mirror segment data
+# These are created on the mirror target hosts
+whpg_mirror_data_directories:
+  - "/data/mirror/seg1"
+  - "/data/mirror/seg2"
+
+# ============================================================
+# Cluster Configuration (usually inherited from group_vars)
+# ============================================================
+whpg_base_dir: "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
+whpg_admin_home_dir: "/home/gpadmin"
+whpg_coordinator_data_directory: "/data/coordinator/gpseg-1"
+
+# Primary segment data directories (must match init role)
+whpg_data_directories:
+  - "/data/primary/seg1"
+  - "/data/primary/seg2"
+
+# ============================================================
+# Recovery Settings
+# ============================================================
+# Automatically recover mirrors after adding them
+whpg_mirror_auto_recover: true
+
+# Wait time (seconds) for mirror synchronization after recovery
+whpg_mirror_sync_wait_seconds: 30
+
+# Use full recovery (vs incremental) for new mirrors
+whpg_mirror_full_recovery: true

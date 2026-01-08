@@ -1,0 +1,126 @@
+---
+# ============================================================
+# Recover Mirrors After Setup
+# ============================================================
+
+# Ensure mirror directories are owned by gpadmin
+- name: Ensure mirror directories are owned by gpadmin
+  become: yes
+  file:
+    path: "{{ item }}"
+    owner: gpadmin
+    group: gpadmin
+    mode: '0700'
+  loop: "{{ whpg_mirror_data_directories }}"
+  delegate_to: "{{ mirror_target_hosts[0] }}"
+
+# Remove postmaster.pid if present in mirror directories
+- name: Remove postmaster.pid if present in mirror directories
+  become: yes
+  file:
+    path: "{{ item }}/postmaster.pid"
+    state: absent
+  loop: "{{ whpg_mirror_data_directories }}"
+  delegate_to: "{{ mirror_target_hosts[0] }}"
+  ignore_errors: true
+
+- name: Check if mirrors need recovery
+  become: yes
+  become_user: gpadmin
+  # Coordinator-side command: use whpg_coordinator_data_directory for COORDINATOR_DATA_DIRECTORY
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpstate -e 2>&1 | grep -c "Down" || echo "0"
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: mirrors_down_count
+  changed_when: false
+  failed_when: false
+
+- name: Debug mirrors down count
+  debug:
+    msg: "Mirrors down/needing recovery: {{ mirrors_down_count.stdout | trim }}"
+
+- name: Check if mirror data directories exist
+  become: yes
+  become_user: gpadmin
+  # Segment/mirror data directory check: use whpg_mirror_data_directories
+  stat:
+    path: "{{ whpg_mirror_data_directories[0] }}/global/pg_control"
+  delegate_to: "{{ mirror_target_hosts[0] }}"
+  register: mirror_dir_check
+  failed_when: false
+
+- name: Determine recovery type needed
+  set_fact:
+    needs_full_recovery: "{{ (add_mirrors is defined and add_mirrors.changed | default(false)) or not (mirror_dir_check.stat.exists | default(false)) }}"
+
+- name: Debug recovery decision
+  debug:
+    msg:
+      - "Mirrors added this run: {{ add_mirrors.changed | default(false) if add_mirrors is defined else 'N/A' }}"
+      - "Mirror pg_control exists: {{ mirror_dir_check.stat.exists | default(false) }}"
+      - "Needs full recovery: {{ needs_full_recovery }}"
+      - "Mirrors down count: {{ mirrors_down_count.stdout | trim }}"
+
+- name: Recover mirrors (full recovery)
+  become: yes
+  become_user: gpadmin
+  # Coordinator-side command: use whpg_coordinator_data_directory for COORDINATOR_DATA_DIRECTORY
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gprecoverseg -aF
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: recover_mirrors_full
+  when:
+    - needs_full_recovery
+    - mirrors_down_count.stdout | trim | int > 0
+  failed_when:
+    - recover_mirrors_full.rc != 0
+    - "'No segments to recover' not in recover_mirrors_full.stdout | default('')"
+
+- name: Recover mirrors (incremental)
+  become: yes
+  become_user: gpadmin
+  # Coordinator-side command: use whpg_coordinator_data_directory for COORDINATOR_DATA_DIRECTORY
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gprecoverseg -a
+  delegate_to: "{{ groups['whpg_primary_coordinator'][0] }}"
+  register: recover_mirrors_inc
+  when:
+    - not needs_full_recovery
+    - mirrors_down_count.stdout | trim | int > 0
+  failed_when:
+    - recover_mirrors_inc.rc != 0
+    - "'No segments to recover' not in recover_mirrors_inc.stdout | default('')"
+
+- name: Display recovery result
+  debug:
+    msg: >-
+      {{
+        recover_mirrors_full.stdout_lines if (recover_mirrors_full is defined and recover_mirrors_full.changed | default(false))
+        else (
+          recover_mirrors_inc.stdout_lines if (recover_mirrors_inc is defined and recover_mirrors_inc.changed | default(false))
+          else 'No recovery output available.'
+        )
+      }}
+
+- name: Show last 20 lines of mirror startup logs if recovery fails
+  become: yes
+  shell: tail -20 {{ item }}/log/startup.log
+  loop: "{{ whpg_mirror_data_directories }}"
+  delegate_to: "{{ mirror_target_hosts[0] }}"
+  when:
+    - mirrors_down_count.stdout | trim | int > 0
+    - recover_mirrors_inc is defined and recover_mirrors_inc.rc != 0
+  ignore_errors: true
+
+- name: Wait for mirror synchronization
+  pause:
+    seconds: "{{ whpg_mirror_sync_wait_seconds | default(30) }}"
+  when: 
+    - mirrors_down_count.stdout | trim | int > 0
+    - (recover_mirrors_full.changed | default(false)) or (recover_mirrors_inc.changed | default(false))

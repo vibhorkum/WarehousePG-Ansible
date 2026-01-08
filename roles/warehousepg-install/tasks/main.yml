@@ -77,10 +77,25 @@
 - name: Combine package installation results
   set_fact:
     package_install:
-      rc: "{{ 0 if (server_install.rc == 0 and clients_install.rc == 0 and backup_install.rc == 0) else 1 }}"
-      changed: "{{ server_install.changed or clients_install.changed or backup_install.changed }}"
-      msg: "Server: {{ 'OK' if server_install.rc == 0 else 'FAILED' }}, Clients: {{ 'OK' if clients_install.rc == 0 else 'FAILED' }}, Backup: {{ 'OK' if backup_install.rc == 0 else 'FAILED' }}"
-
+      rc: >-
+        {{
+          0 if (
+            (server_install  | default({})).get('rc', 0) == 0 and
+            (clients_install | default({})).get('rc', 0) == 0 and
+            (backup_install  | default({})).get('rc', 0) == 0
+          ) else 1
+        }}
+      changed: >-
+        {{
+          (server_install  | default({})).get('changed', false) or
+          (clients_install | default({})).get('changed', false) or
+          (backup_install  | default({})).get('changed', false)
+        }}
+      msg: >-
+        Server: {{ 'OK' if (server_install  | default({})).get('rc', 0) == 0 else 'FAILED' }},
+        Clients: {{ 'OK' if (clients_install | default({})).get('rc', 0) == 0 else 'FAILED' }},
+        Backup: {{ 'OK' if (backup_install  | default({})).get('rc', 0) == 0 else 'FAILED' }}
+        
 - name: Display package installation result
   debug:
     msg: 

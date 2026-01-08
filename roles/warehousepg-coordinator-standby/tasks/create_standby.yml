@@ -1,0 +1,103 @@
+# Create coordinator standby on same or different host
+- name: DEBUG - Show aliases
+  debug:
+    msg: 
+      - "Current host primary_coordinator: {{ primary_coordinator }}"
+      - "Loop host ({{ item }}) alias: {{ hostvars[item].replication_alias | default('MISSING') }}"
+  loop: "{{ groups['whpg_primary_coordinator'] }}"
+
+- name: Set Primary Host context for Standby
+  set_fact:
+    target_primary_host: "{{ item }}"
+  loop: "{{ groups['whpg_primary_coordinator'] }}"
+  when: 
+    - hostvars[item]['replication_alias'] == primary_coordinator
+    - inventory_hostname in groups['whpg_coordinator_standby']
+  register: primary_mapping
+
+- name: Fail if Primary Coordinator was not found
+  fail:
+    msg: "Could not find a primary host with replication_alias: {{ primary_coordinator }}"
+  when: 
+    - inventory_hostname in groups['whpg_coordinator_standby']
+    - target_primary_host is not defined
+
+- name: Check if standby data directory exists
+  stat:
+    path: "{{ whpg_coordinator_standby_data_directory }}"
+  register: standby_dir_stat
+  when: inventory_hostname in groups['whpg_coordinator_standby']
+  
+- name: Check if standby is already configured
+  become: yes
+  become_user: gpadmin
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    gpstate -s >/tmp/standby.log 2>&1 
+    grep -q "Standby" /tmp/standby.log && echo "present" || echo "absent"
+  args:
+    executable: /bin/bash 
+  register: standby_status
+  when: inventory_hostname in groups['whpg_coordinator_standby']
+
+- name: Remove existing standby data directory if present and standby not configured
+  become: yes
+  file:
+    path: "{{ whpg_coordinator_standby_data_directory }}"
+    state: absent
+    force: true
+  delegate_to: "{{ whpg_coordinator_standby_host }}"
+  when:
+    - standby_dir_stat is defined
+    - standby_status is defined 
+    - standby_dir_stat.stat.exists
+    - standby_status.stdout == "absent"
+    - inventory_hostname in groups['whpg_coordinator_standby']
+
+- name: Ensure standby data directory exists (if standby not configured)
+  file:
+    path: "{{ whpg_coordinator_standby_data_directory | dirname }}"
+    state: directory
+    owner: gpadmin
+    group: gpadmin
+    mode: '0700'
+  when:
+    - standby_status.stdout == "absent"
+    - inventory_hostname in groups['whpg_coordinator_standby']
+
+- name: Run gpinitstandby (Same Host)
+  become: yes
+  become_user: gpadmin
+  register: gpinit_result_same
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpinitstandby -s {{ private_ip }} -S {{ whpg_coordinator_standby_data_directory }} -P {{ whpg_coordinator_standby_port | default(5433) }} -a
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ hostvars[target_primary_host]['ansible_host'] }}"
+  when:
+    - inventory_hostname in groups['whpg_coordinator_standby']
+    - standby_status.stdout == "absent"
+    - private_ip == hostvars[target_primary_host]['private_ip']
+
+- name: Run gpinitstandby (Remote Host)
+  become: yes
+  become_user: gpadmin
+  register: gpinit_result_remote
+  shell: |
+    source {{ whpg_base_dir }}/greenplum_path.sh
+    export COORDINATOR_DATA_DIRECTORY={{ whpg_coordinator_data_directory }}
+    gpinitstandby -s {{ private_ip }} -S {{ whpg_coordinator_standby_data_directory }} -P {{ whpg_coordinator_standby_port | default(5433) }} -a
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ hostvars[target_primary_host]['ansible_host'] }}"
+  when:
+    - inventory_hostname in groups['whpg_coordinator_standby']
+    - standby_status.stdout == "absent"
+    - private_ip != hostvars[target_primary_host]['private_ip']
+
+- name: Show gpinitstandby result
+  debug:
+    msg: "{{ (gpinit_result_same.stdout_lines if gpinit_result_same.stdout_lines is defined else gpinit_result_remote.stdout_lines) | default('No initialization performed') }}"
+  when: inventory_hostname in groups['whpg_coordinator_standby']

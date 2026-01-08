@@ -1,0 +1,5 @@
+---
+# Default variables for coordinator standby role
+whpg_coordinator_standby_host: "{{ groups['whpg_coordinator_standby'] | default([]) | first | default(inventory_hostname) }}"
+whpg_coordinator_standby_data_directory: "/data/standby_coordinator/gpseg-1"
+whpg_coordinator_standby_port: 5433

@@ -1,0 +1,59 @@
+---
+# ============================================================
+# WarehousePG Segment Mirror Role - Main Tasks
+# ============================================================
+
+- name: Set effective mirror mode
+  set_fact:
+    effective_mirror_mode: "{{ whpg_mirror_mode | default('same_host') }}"
+  run_once: true
+  tags: [mirrors, setup]
+
+- name: Display mirror setup information
+  debug:
+    msg:
+      - "========================================="
+      - "WarehousePG Segment Mirror Setup"
+      - "========================================="
+      - "Mirror Mode: {{ effective_mirror_mode }}"
+      - "Mirror Port Base: {{ whpg_mirror_port_base }}"
+      - "Mirror Directories: {{ whpg_mirror_data_directories }}"
+      - "Primary Segments: {{ groups['whpg_primary_segments'] | length }} hosts"
+  run_once: true
+  tags: [mirrors, setup]
+
+- name: Validate mirror configuration
+  include_tasks: validate_config.yml
+  run_once: true
+  tags: [mirrors, setup, validate]
+
+- name: Setup mirrors (same_host mode)
+  include_tasks: setup_same_host_mirrors.yml
+  when: effective_mirror_mode == 'same_host'
+  tags: [mirrors, setup]
+
+- name: Setup mirrors (spread mode)
+  include_tasks: setup_spread_mirrors.yml
+  when: effective_mirror_mode == 'spread'
+  tags: [mirrors, setup]
+
+- name: Setup mirrors (remote_hosts mode)
+  include_tasks: setup_remote_mirrors.yml
+  when: effective_mirror_mode == 'remote_hosts'
+  tags: [mirrors, setup]
+
+- name: Verify mirror status
+  include_tasks: verify_mirrors.yml
+  tags: [mirrors, setup, verify]
+
+- name: Display mirror setup completion
+  debug:
+    msg:
+      - "========================================="
+      - "Segment Mirror Setup Complete"
+      - "========================================="
+      - "Mode: {{ effective_mirror_mode }}"
+      - "Use 'gpstate -m' to check mirror status"
+      - "Use 'gpstate -e' for detailed segment info"
+  run_once: true
+  tags: [mirrors, setup]

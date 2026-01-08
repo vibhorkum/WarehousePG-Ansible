@@ -1,0 +1,141 @@
+---
+# WarehousePG Segment Mirrors Setup Playbook
+#
+# This playbook configures segment mirrors for a WarehousePG cluster.
+#
+# Usage:
+#   # Same host mode (default) - mirrors on same servers as primaries
+#   ansible-playbook -i inventory.yml setup_mirrors.yml
+#
+#   # Spread mode - mirrors distributed across segment hosts
+#   ansible-playbook -i inventory.yml setup_mirrors.yml -e "whpg_mirror_mode=spread"
+#
+#   # Remote hosts mode - mirrors on dedicated separate hosts
+#   ansible-playbook -i inventory.yml setup_mirrors.yml -e "whpg_mirror_mode=remote_hosts"
+#
+# Prerequisites:
+#   - WarehousePG cluster initialized and running
+#   - For remote_hosts mode: whpg_mirror_segments group in inventory
+
+# ============================================================
+# Phase 1: Prepare mirror hosts (for remote_hosts mode only)
+# ============================================================
+- name: Prepare Mirror Hosts - OS Configuration
+  hosts: whpg_mirror_segments
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    edb_subscription_token: "{{ edb_subscription_token | default('a42f0873c732be6edafe2e22849eb0ff') }}"
+  
+  roles:
+    - role: warehousepg-os-config
+      tags: [os-config, prepare]
+      when: whpg_mirror_mode | default('same_host') == 'remote_hosts'
+
+- name: Prepare Mirror Hosts - Install WarehousePG
+  hosts: whpg_mirror_segments
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    edb_subscription_token: "{{ edb_subscription_token | default('a42f0873c732be6edafe2e22849eb0ff') }}"
+  
+  roles:
+    - role: warehousepg-install
+      tags: [install, prepare]
+      when: whpg_mirror_mode | default('same_host') == 'remote_hosts'
+
+- name: Prepare Mirror Hosts - Create Storage
+  hosts: whpg_mirror_segments
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    whpg_force_create: true
+    whpg_create_coordinator_dirs: false
+    whpg_create_primary_dirs: false
+    whpg_create_mirror_dirs: true
+  
+  roles:
+    - role: warehousepg-storage
+      tags: [storage, prepare]
+      when: whpg_mirror_mode | default('same_host') == 'remote_hosts'
+
+# ============================================================
+# Phase 2: Configure /etc/hosts and passwordless SSH
+# ============================================================
+- name: Configure /etc/hosts on all hosts
+  hosts: whpg_primary_site:whpg_mirror_segments
+  become: yes
+  gather_facts: yes
+  
+  tasks:
+    - name: Update /etc/hosts with all host information
+      include_role:
+        name: warehousepg-install
+        tasks_from: configure_hosts
+      tags: [hosts, ssh]
+      when: whpg_mirror_mode | default('same_host') == 'remote_hosts'
+
+- name: Configure Passwordless SSH for gpadmin
+  hosts: whpg_primary_site:whpg_mirror_segments
+  become: yes
+  gather_facts: yes
+  
+  tasks:
+    - name: Setup passwordless SSH for gpadmin
+      include_role:
+        name: warehousepg-install
+        tasks_from: passwordless_ssh
+      tags: [ssh]
+      when: whpg_mirror_mode | default('same_host') == 'remote_hosts'
+
+# ============================================================
+# Phase 3: Setup Segment Mirrors
+# ============================================================
+- name: Setup WarehousePG Segment Mirrors
+  hosts: whpg_primary_coordinator
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    # Mirror port configuration
+    whpg_mirror_port_base: 7000
+    
+    # Mirror data directories
+    whpg_mirror_data_directories:
+      - "/data/mirror/seg1"
+      - "/data/mirror/seg2"
+  
+  pre_tasks:
+    - name: Display mirror setup information
+      debug:
+        msg:
+          - "======================================================"
+          - "WarehousePG Segment Mirror Setup"
+          - "======================================================"
+          - "Mirror Mode: {{ whpg_mirror_mode | default('same_host') }}"
+          - "Mirror Port Base: {{ whpg_mirror_port_base }}"
+          - "Primary Segments: {{ groups['whpg_primary_segments'] | length }}"
+          - "======================================================"
+      run_once: true
+  
+  roles:
+    - role: warehousepg-segment-mirrors
+      tags: [mirrors, setup]
+  
+  post_tasks:
+    - name: Display completion message
+      debug:
+        msg:
+          - "======================================================"
+          - "Segment Mirror Setup Complete!"
+          - "======================================================"
+          - "Mirror Mode: {{ whpg_mirror_mode | default('same_host') }}"
+          - ""
+          - "Verification Commands:"
+          - "  gpstate -m     # Check mirror status"
+          - "  gpstate -e     # Check for errors"
+          - "======================================================"
+      run_once: true
