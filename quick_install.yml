@@ -5,7 +5,6 @@
   become: yes
   any_errors_fatal: true
   vars:
-    edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"
     whpg_storage_base: "/data"
     whpg_coordinator_storage: "/data/coordinator"
     whpg_primary_storage: "/data/primary"
@@ -18,6 +17,21 @@
     whpg_coordinator_standby_data_directory: "/data/standby_coordinator/gpseg-1"
     whpg_coordinator_standby_port: 5433
   pre_tasks:
+    - name: Validate EDB subscription token is provided
+      ansible.builtin.assert:
+        that:
+          - edb_subscription_token is defined
+          - edb_subscription_token | length > 0
+          - edb_subscription_token != "YOUR_TOKEN_HERE"
+        fail_msg: |
+          EDB subscription token is required but not provided.
+          Please set edb_subscription_token via:
+            1. Ansible vault (recommended): group_vars/all/vault.yml
+            2. Environment variable: export EDB_SUBSCRIPTION_TOKEN=your_token
+            3. Command line: -e "edb_subscription_token=your_token"
+        success_msg: "EDB subscription token is configured"
+      run_once: true
+
     - name: Display installation start
       ansible.builtin.debug:
         msg:
@@ -30,16 +44,11 @@
           - "Mirrors enabled: {{ whpg_enable_mirrors }}"
           - "DR site mirrors: {{ whpg_use_dr_site_mirrors }}"
           - "======================================================"
-    - name: Add the edb_subscription_token
-      ansible.builtin.set_fact:
-        edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"
 
   roles:
     - role: warehousepg-os-config
       tags: [os-config, config]
     - role: warehousepg-install
-      vars:
-        edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"
       tags: [install, packages]
     - role: warehousepg-storage
       vars:

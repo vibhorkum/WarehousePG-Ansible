@@ -16,11 +16,20 @@ whpg_base_dir: "{{ whpg_install_path }}"
 # Cluster Configuration
 # ============================================================
 whpg_cluster_name: "WarehousePG_HA_Cluster"
-
+whpg_archive_base: /data/archived_wals
+whpg_hba_rules: >-
+    {{
+      whpg_pg_hba_allowed_cidr
+      | map('regex_replace', '^(.*)$', '\\1')
+      | map('community.general.dict_kv', 'address')
+      | list
+    }}
 # Coordinator settings
 whpg_coordinator_port: 5432
 whpg_coordinator_directory: "/data/coordinator"
 whpg_coordinator_data_directory: "{{ whpg_coordinator_directory }}/gpseg-1"
+whpg_coordinator_pg_hba: "{{ whpg_coordinator_data_directory }}/pg_hba.conf"
+whpg_coordinator_archive_directory: "{{ whpg_archive_base }}/coordinator"
 
 # Segment settings
 whpg_segment_port_base: 6000
@@ -29,7 +38,8 @@ whpg_mirror_port_base: 7000
 # ============================================================
 # Network Configuration
 # ============================================================
-whpg_pg_hba_allowed_cidr: "10.0.0.0/16"
+whpg_pg_hba_allowed_cidr: 
+- 10.0.0.0/16
 
 # IP preference for /etc/hosts entries: 'private_ip' or 'ansible_host'
 # Use 'private_ip' for cloud environments with VPC/private networking
@@ -46,6 +56,13 @@ whpg_coordinator_storage: "{{ whpg_storage_base }}/coordinator"
 whpg_primary_storage: "{{ whpg_storage_base }}/primary"
 whpg_mirror_storage: "{{ whpg_storage_base }}/mirror"
 
+# Default variables for coordinator standby role
+whpg_coordinator_standby_host: "{{ groups['whpg_coordinator_standby'] | default([]) | first | default(inventory_hostname) }}"
+whpg_coordinator_standby_data_directory: "/data/standby_coordinator/gpseg-1"
+whpg_coordinator_standby_port: 5433
+whpg_coordinator_standby_pg_hba: "{{ whpg_coordinator_standby_data_directory }}/pg_hba.conf"
+whpg_coordinator_standby_archive_directory: "{{ whpg_archive_base }}/standby_coordinator"
+
 # Segment data directories (determines segments per host)
 whpg_data_directories:
   - "/data/primary/seg1"
@@ -54,6 +71,25 @@ whpg_data_directories:
 whpg_mirror_data_directories:
   - "/data/mirror/seg1"
   - "/data/mirror/seg2"
+
+# Segment archive directories
+whpg_data_archive_directories:
+  - "/data/archived_wals/seg1"
+  - "/data/archived_wals/seg2"
+
+# Mirror segment archive directories
+whpg_mirror_data_archive_directories:
+  - "/data/archived_wals/mirror_seg1"
+  - "/data/archived_wals/mirror_seg2"
+
+# pg_hba.conf paths for segments and mirrors
+whpg_data_pg_hba:
+  - "/data/primary/seg1/pg_hba.conf"
+  - "/data/primary/seg2/pg_hba.conf"
+
+whpg_mirror_data_pg_hba:
+  - "/data/mirror/seg1/pg_hba.conf"
+  - "/data/mirror/seg2/pg_hba.conf"
 
 # ============================================================
 # User Configuration

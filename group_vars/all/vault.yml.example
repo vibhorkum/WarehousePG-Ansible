@@ -1,5 +1,27 @@
-# Ansible Vault encrypted variables
-# Create this file with: ansible-vault create group_vars/all/vault.yml
+# ============================================================
+# Ansible Vault Template for Sensitive Variables
+# ============================================================
+#
+# Setup Instructions:
+# 1. Copy this file to vault.yml:
+#    cp vault.yml.example vault.yml
+#
+# 2. Replace placeholder values with actual credentials
+#
+# 3. Encrypt the file with ansible-vault:
+#    ansible-vault encrypt vault.yml
+#
+# 4. Run playbooks with vault password:
+#    ansible-playbook -i inventory.yml playbook.yml --ask-vault-pass
+#
+# Or use a password file:
+#    ansible-playbook -i inventory.yml playbook.yml --vault-password-file ~/.vault_pass
+#
+# ============================================================
 
-edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"
-whpg_gpadmin_password: "NewPassword@123"
+# EDB Repository Token (REQUIRED)
+# Get your token from: https://www.enterprisedb.com/repos-downloads
+edb_subscription_token: "YOUR_TOKEN_HERE"
+
+# Optional: gpadmin user password
+# whpg_gpadmin_password: "YOUR_SECURE_PASSWORD_HERE"

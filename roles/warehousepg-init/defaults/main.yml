@@ -14,12 +14,12 @@ whpg_seg_prefix: "gpseg"
 # Make sure this is outside the range in net.ipv4.ip_local_port_range
 whpg_port_base: 6000
 
-# Coordinator hostname (required - should match the coordinator inventory host)
-# Auto-detects from whpg_coordinator or whpg_primary_coordinator group
-whpg_coordinator_hostname: "{{ hostvars[groups['whpg_coordinator'][0] if 'whpg_coordinator' in groups else groups['whpg_primary_coordinator'][0]].hostname | default(groups['whpg_coordinator'][0] if 'whpg_coordinator' in groups else groups['whpg_primary_coordinator'][0]) }}"
 
-# Coordinator data directory (required)
-whpg_coordinator_directory: "/data/coordinator"
+# Coordinator hostname (auto-detect from inventory, supports multi-site)
+whpg_coordinator_hostname: "{{ hostvars[groups['site1_coordinator'][0]].hostname | default(groups['site1_coordinator'][0]) }}"
+
+# Coordinator data directory (update if your inventory uses a different path)
+whpg_coordinator_directory: "/data/warehousepg_coordinator"
 
 # Coordinator port (default: 5432)
 whpg_coordinator_port: 5432
@@ -33,11 +33,9 @@ whpg_checkpoint_segments: 8
 # Database encoding (default: UNICODE)
 whpg_encoding: "UNICODE"
 
-# Data directories for primary segments (required)
-# This determines the number of segments per host
+# Data directories for primary segments (update to match inventory)
 whpg_data_directories:
-  - "/data1/primary"
-  - "/data2/primary"
+  - "/data/warehousepg_segments"
 
 # Enable mirror segments (default: false)
 whpg_enable_mirrors: false
@@ -45,22 +43,21 @@ whpg_enable_mirrors: false
 # Port base for mirror segments (only used if mirrors are enabled)
 whpg_mirror_port_base: 7000
 
-# Data directories for mirror segments (only used if mirrors are enabled)
+# Data directories for mirror segments (update to match inventory)
 whpg_mirror_data_directories:
-  - "/data1/mirror"
-  - "/data2/mirror"
+  - "/data/warehousepg_mirrors"
 
 # Mirror mode (only used if mirrors are enabled)
-# Options: spread, grouped
+# Options: same_host, spread, remote_hosts
 whpg_mirror_mode: "spread"
 
 # Use DR site for mirrors (default: false)
-# When true, mirrors are placed on whpg_dr_segments hosts
+# When true, mirrors are placed on DR site hosts (site2_segments)
 # When false, mirrors use the same hosts as primaries (spread/grouped)
-whpg_use_dr_site_mirrors: false
+whpg_use_dr_site_mirrors: true
 
-# Standby coordinator hostname (optional)
-whpg_standby_coordinator_hostname: ""
+# Standby coordinator hostname (auto-detect from inventory)
+whpg_standby_coordinator_hostname: "{{ hostvars[groups['site1_standby'][0]].hostname | default(groups['site1_standby'][0]) }}"
 
 # Timezone setting for WarehousePG (default: US/Pacific)
 whpg_timezone: "US/Pacific"

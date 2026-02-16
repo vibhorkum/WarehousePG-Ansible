@@ -18,7 +18,28 @@ Complete Ansible automation for WarehousePG High Availability installation and d
 
 ## Quick Start
 
-### 1. Update Inventory
+### 1. Install Required Collections
+
+```bash
+# Install Ansible collection dependencies
+ansible-galaxy collection install -r requirements.yml
+```
+
+### 2. Configure Credentials (Vault)
+
+```bash
+# Copy the vault template
+cp group_vars/all/vault.yml.example group_vars/all/vault.yml
+
+# Edit and add your EDB subscription token
+# Get your token from: https://www.enterprisedb.com/repos-downloads
+vi group_vars/all/vault.yml
+
+# Encrypt the vault file (REQUIRED for production)
+ansible-vault encrypt group_vars/all/vault.yml
+```
+
+### 3. Update Inventory
 
 Edit `test_inventory.yml` with your server details:
 
@@ -39,26 +60,26 @@ all:
               private_ip: 10.0.9.61
 ```
 
-### 2. Set EDB Token
+### 4. Run Installation
 
 ```bash
-# Option 1: Edit quick_install.yml and set edb_subscription_token
-# Option 2: Pass as extra var
-ansible-playbook -i test_inventory.yml quick_install.yml \
-  -e "edb_subscription_token=your_token_here"
-```
+# Complete installation (with vault password prompt)
+ansible-playbook -i test_inventory.yml quick_install.yml --ask-vault-pass
 
-### 3. Run Installation
-
-```bash
-# Complete installation
-ansible-playbook -i test_inventory.yml quick_install.yml
+# Or use a password file
+ansible-playbook -i test_inventory.yml quick_install.yml --vault-password-file ~/.vault_pass
 
 # Initialize cluster
-ansible-playbook -i test_inventory.yml init.yml
+ansible-playbook -i test_inventory.yml init.yml --ask-vault-pass
 
 # Setup DR (optional)
-ansible-playbook -i test_inventory.yml dr_setup.yml
+ansible-playbook -i test_inventory.yml dr_setup.yml --ask-vault-pass
+```
+
+**Alternative:** Pass token as command-line variable (not recommended for production):
+```bash
+ansible-playbook -i test_inventory.yml quick_install.yml \
+  -e "edb_subscription_token=your_token_here"
 ```
 
 ## Playbook Reference
@@ -687,13 +708,14 @@ WarehousePG-Ansible/
 ├── dr_setup.yml                # DR setup playbook
 ├── cleanup_all.yml             # Complete cleanup
 ├── validate.yml                # Performance validation
+├── requirements.yml            # Ansible collection dependencies
 ├── inventory.yml               # Production inventory template
 ├── test_inventory.yml          # Test/dev inventory
 ├── ansible.cfg                 # Ansible configuration
 ├── group_vars/
 │   └── all/
 │       ├── main.yml           # Default variables
-│       └── vault.yml.example  # Vault template
+│       └── vault.yml.example  # Vault template (copy to vault.yml)
 └── roles/
     ├── warehousepg-install/    # User, packages, SSH
     ├── warehousepg-os-config/  # OS tuning
@@ -768,13 +790,21 @@ gpstop -u
 
 ## Prerequisites
 
+**Control Node (where you run Ansible):**
+- Ansible 2.9+ (recommended: 2.14+)
+- Required collections: `ansible-galaxy collection install -r requirements.yml`
+  - `community.general` (>=5.0.0)
+  - `ansible.posix` (>=1.0.0)
+
+**Managed Nodes (target servers):**
 - Rocky Linux 9.3 or RHEL 9
-- Ansible 2.9+
-- Valid EDB subscription token
-- SSH access with sudo privileges
 - Python 3.6+ on managed nodes
+- SSH access with sudo privileges
 - Minimum 4 GB RAM per host
 - 20 GB+ disk space per segment
+
+**Credentials:**
+- Valid EDB subscription token (get from https://www.enterprisedb.com/repos-downloads)
 
 ## License
 

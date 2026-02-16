@@ -7,6 +7,7 @@
 
 #### REQUIRED PARAMETERS ####
 
+
 # Segment prefix - naming convention for segments (e.g., gpseg0, gpseg1)
 SEG_PREFIX={{ whpg_seg_prefix }}
 
@@ -14,14 +15,14 @@ SEG_PREFIX={{ whpg_seg_prefix }}
 # Each segment on a host will use PORT_BASE + segment_number
 PORT_BASE={{ whpg_port_base }}
 
-# Array of data directories for primary segments
+# Array of data directories for primary segments (from inventory)
 # The number of directories determines segments per host
 declare -a DATA_DIRECTORY=({% for dir in whpg_data_directories %}{{ dir }}{% if not loop.last %} {% endif %}{% endfor %})
 
 # Coordinator hostname (must match hostname in inventory)
 COORDINATOR_HOSTNAME={{ whpg_coordinator_hostname }}
 
-# Coordinator data directory location
+# Coordinator data directory location (from inventory)
 COORDINATOR_DIRECTORY={{ whpg_coordinator_directory }}
 
 # Coordinator port number
@@ -42,7 +43,7 @@ ENCODING={{ whpg_encoding }}
 # Base port number for mirror segments
 MIRROR_PORT_BASE={{ whpg_mirror_port_base }}
 
-# Array of data directories for mirror segments
+# Array of data directories for mirror segments (from inventory)
 declare -a MIRROR_DATA_DIRECTORY=({% for dir in whpg_mirror_data_directories %}{{ dir }}{% if not loop.last %} {% endif %}{% endfor %})
 
 {% endif %}

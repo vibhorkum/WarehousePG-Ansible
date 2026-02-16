@@ -1,2 +1,26 @@
 ---
-dependencies: []
+galaxy_info:
+  author: WarehousePG Team
+  description: Configure standby coordinator for WarehousePG cluster
+  company:
+  license: MIT
+  min_ansible_version: "2.9"
+  platforms:
+    - name: EL
+      versions:
+        - "8"
+        - "9"
+    - name: Rocky
+      versions:
+        - "8"
+        - "9"
+  galaxy_tags:
+    - database
+    - greenplum
+    - warehousepg
+    - standby
+    - ha
+
+dependencies:
+  # Cluster must be initialized before adding standby
+  - role: warehousepg-init

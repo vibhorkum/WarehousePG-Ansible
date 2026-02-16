@@ -1,0 +1,21 @@
+---
+# ============================================================
+# Ansible Collection Dependencies
+# ============================================================
+#
+# Install all required collections:
+#   ansible-galaxy collection install -r requirements.yml
+#
+# Force reinstall (upgrade):
+#   ansible-galaxy collection install -r requirements.yml --force
+#
+# ============================================================
+
+collections:
+  # Required for various utility modules (parted, sysctl, etc.)
+  - name: community.general
+    version: ">=5.0.0"
+
+  # Required for POSIX-specific modules (synchronize, authorized_key, etc.)
+  - name: ansible.posix
+    version: ">=1.0.0"

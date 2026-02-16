@@ -27,11 +27,23 @@
   hosts: whpg_dr_site
   become: yes
   gather_facts: yes
-  
-  vars:
-    # EDB Repository Token (REQUIRED - update with your token)
-    edb_subscription_token: "a42f0873c732be6edafe2e22849eb0ff"
-  
+
+  pre_tasks:
+    - name: Validate EDB subscription token is provided
+      ansible.builtin.assert:
+        that:
+          - edb_subscription_token is defined
+          - edb_subscription_token | length > 0
+          - edb_subscription_token != "YOUR_TOKEN_HERE"
+        fail_msg: |
+          EDB subscription token is required but not provided.
+          Please set edb_subscription_token via:
+            1. Ansible vault (recommended): group_vars/all/vault.yml
+            2. Environment variable: export EDB_SUBSCRIPTION_TOKEN=your_token
+            3. Command line: -e "edb_subscription_token=your_token"
+        success_msg: "EDB subscription token is configured"
+      run_once: true
+
   roles:
     - role: warehousepg-install
       tags: [install, packages]
@@ -89,4 +101,3 @@
         tasks_from: passwordless_ssh
       tags: [ssh, install]
 
-# Phase 4 removed: DR replication role no longer used

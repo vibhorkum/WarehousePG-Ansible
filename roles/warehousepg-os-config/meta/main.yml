@@ -2,7 +2,7 @@
 galaxy_info:
   author: WarehousePG Team
   description: Ansible role for WarehousePG OS configuration and tuning
-  company: 
+  company:
   license: MIT
   min_ansible_version: 2.9
   platforms:
@@ -19,3 +19,7 @@ galaxy_info:
     - tuning
 
 dependencies: []
+
+# Required collections (install with: ansible-galaxy collection install -r requirements.yml)
+# - community.general (for sysctl, firewalld modules)
+# - ansible.posix (for selinux module)

@@ -2,7 +2,7 @@
 galaxy_info:
   author: WarehousePG Team
   description: Ansible role for WarehousePG RPM installation from EDB repository
-  company: 
+  company:
   license: MIT
   min_ansible_version: 2.9
   platforms:
@@ -16,4 +16,9 @@ galaxy_info:
     - warehousepg
     - installation
 
-dependencies: []
+dependencies:
+  # OS configuration must be applied before installation
+  - role: warehousepg-os-config
+
+# Required collections (install with: ansible-galaxy collection install -r requirements.yml)
+# - ansible.posix (for authorized_key module)

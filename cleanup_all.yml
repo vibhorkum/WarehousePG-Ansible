@@ -1,337 +1,123 @@
 ---
-# Cleanup Playbook - Remove WarehousePG Installation Completely
-# WARNING: This will destroy all data and remove the entire WarehousePG installation
-# Use with caution!
+# Playbook: cleanup_all.yml
+# Description: Cleans up all WarehousePG components, including data directories, users, packages, and configuration files.
+# Usage: ansible-playbook -i test_inventory.yml cleanup_all.yml
 
-- name: Stop WarehousePG Cluster on Primary Coordinator
-  hosts: whpg_primary_coordinator
-  gather_facts: yes
+- name: Cleanup WarehousePG Cluster
+  hosts: all
   become: yes
-  tags: [cleanup, stop-cluster]
-  
+  vars:
+    whpg_data_directories:
+      - /data/warehousepg
+      - /data/warehousepg_mirrors
+      - /data/warehousepg_segments
+      - /data/warehousepg_coordinator
+      - /data/warehousepg_standby
+      - /data/coordinator
+      - /data/primary
+      - /data/mirror
+    whpg_users:
+      - gpadmin
+      - postgres
+    whpg_packages:
+      - warehouse-pg-7
+      - warehouse-pg-clients
+      - whpg-backup
   tasks:
-    - name: Check if cluster is running
-      become_user: gpadmin
-      shell: |
-        source /usr/local/greenplum-db-7.3.0-WHPG/greenplum_path.sh 2>/dev/null || true
-        export COORDINATOR_DATA_DIRECTORY=/data/coordinator/gpseg-1
-        gpstate -s 2>/dev/null || echo "not_running"
-      register: cluster_check
-      failed_when: false
+    - name: Check if warehousepg service exists
+      ansible.builtin.command: systemctl status warehousepg
+      register: service_check
       changed_when: false
-      ignore_errors: yes
-
-    - name: Stop WarehousePG cluster
-      become_user: gpadmin
-      shell: |
-        source /usr/local/greenplum-db-7.3.0-WHPG/greenplum_path.sh
-        export COORDINATOR_DATA_DIRECTORY=/data/coordinator/gpseg-1
-        gpstop -a -M fast
-      when: 
-        - cluster_check.stdout is defined
-        - "'not_running' not in cluster_check.stdout"
-      register: cluster_stop
       failed_when: false
-      ignore_errors: yes
 
-    - name: Force stop any remaining postgres processes
-      shell: |
-        pkill -9 -u gpadmin postgres || true
-        sleep 2
-      ignore_errors: yes
+    - name: Stop WarehousePG services
+      ansible.builtin.service:
+        name: warehousepg
+        state: stopped
+      when: service_check.rc == 0
+      register: service_stop
+      failed_when: false
 
-- name: Stop Standby Coordinator on DR Site
-  hosts: whpg_dr_coordinator
-  gather_facts: yes
-  become: yes
-  tags: [cleanup, stop-standby]
-  
-  tasks:
-    - name: Stop standby coordinator postgres processes
-      shell: |
-        pkill -9 -u gpadmin postgres || true
-        sleep 2
-      ignore_errors: yes
+    - name: Kill any remaining postgres processes
+      ansible.builtin.shell: pkill -9 -u gpadmin postgres || true
+      changed_when: false
+      failed_when: false
 
-- name: Stop Mirror Segments on DR Site
-  hosts: whpg_dr_segments
-  gather_facts: yes
-  become: yes
-  tags: [cleanup, stop-mirrors]
-  
-  tasks:
-    - name: Stop mirror segment postgres processes
-      shell: |
-        pkill -9 -u gpadmin postgres || true
-        sleep 2
-      ignore_errors: yes
-
-- name: Stop Primary Segments
-  hosts: whpg_primary_segments
-  gather_facts: yes
-  become: yes
-  tags: [cleanup, stop-segments]
-  
-  tasks:
-    - name: Stop segment postgres processes
-      shell: |
-        pkill -9 -u gpadmin postgres || true
-        sleep 2
-      ignore_errors: yes
-
-- name: Cleanup All Hosts (Primary and DR)
-  hosts: whpg_primary_site:whpg_dr_site
-  gather_facts: yes
-  become: yes
-  tags: [cleanup, remove-all]
-  
-  tasks:
-    - name: Remove data directories
-      file:
+    - name: Remove WarehousePG data directories
+      ansible.builtin.file:
         path: "{{ item }}"
         state: absent
-      loop:
-        - /data/coordinator
-        - /data/primary
-        - /data/mirror
-        - /data/standby
-      ignore_errors: yes
-
-    - name: Remove WarehousePG installation directories
-      file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - "/usr/local/greenplum-db-{{ whpg_version | default('7.3.0') }}-WHPG"
-        - /usr/local/greenplum-db
-        - "/usr/local/greenplum-db-clients-{{ whpg_version | default('7.3.0') }}-WHPG"
-      ignore_errors: yes
-
-    - name: Terminate gpadmin user sessions
-      shell: |
-        loginctl terminate-user gpadmin 2>/dev/null || true
-        pkill -9 -u gpadmin 2>/dev/null || true
-        sleep 2
-      ignore_errors: yes
-
-    - name: Remove gpadmin home directory
-      file:
-        path: /home/gpadmin
-        state: absent
-      ignore_errors: yes
-
-    - name: Remove gpadmin user
-      user:
-        name: gpadmin
-        state: absent
-        remove: yes
-      ignore_errors: yes
-
-    - name: Remove WarehousePG repository configuration
-      file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /etc/yum.repos.d/warehousepg.repo
-        - /etc/yum.repos.d/enterprisedb.repo
-      ignore_errors: yes
-
-    - name: Clean YUM cache
-      shell: yum clean all
-      ignore_errors: yes
+      loop: "{{ whpg_data_directories }}"
+      register: dir_removal
+      failed_when: false
 
     - name: Remove WarehousePG packages
-      yum:
-        name:
-          - warehouse-pg-7
-          - warehouse-pg-clients
-          - whpg-backup
+      ansible.builtin.dnf:
+        name: "{{ whpg_packages }}"
         state: absent
-      ignore_errors: yes
+      register: package_removal
+      failed_when: false
 
-    - name: Clean up /etc/hosts entries for replication aliases
-      lineinfile:
+    - name: Remove EDB repository configuration
+      ansible.builtin.file:
+        path: /etc/yum.repos.d/enterprisedb-gpsupp.repo
+        state: absent
+      failed_when: false
+
+    - name: Remove WarehousePG users
+      ansible.builtin.user:
+        name: "{{ item }}"
+        state: absent
+        remove: yes
+        force: yes
+      loop: "{{ whpg_users }}"
+      register: user_removal
+      failed_when: false
+
+    - name: Remove configuration files
+      ansible.builtin.file:
+        path: /etc/warehousepg
+        state: absent
+      failed_when: false
+
+    - name: Remove greenplum installation directory
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/local/greenplum-db
+        - /usr/local/greenplum-db-7.3.0-WHPG
+      failed_when: false
+
+    - name: Remove custom host entries
+      ansible.builtin.lineinfile:
         path: /etc/hosts
         regexp: "{{ item }}"
         state: absent
       loop:
-        - '.*site1-coordinator-repl.*'
-        - '.*site1-segment-repl.*'
-        - '.*site2-coordinator-repl.*'
-        - '.*site2-segment-repl.*'
-        - '.*whpg-coordinator.*'
-        - '.*whpg-segment.*'
-      ignore_errors: yes
-
-    - name: Remove gpadmin SSH keys and known_hosts
-      file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /root/.ssh/gpadmin_id_rsa
-        - /root/.ssh/gpadmin_id_rsa.pub
-      ignore_errors: yes
-
-    - name: Remove PostgreSQL lock files
-      shell: rm -f /tmp/.s.PGSQL.*.lock /tmp/.s.PGSQL.*
-      ignore_errors: yes
-
-    - name: Remove gpadmin gpconfigs directory
-      file:
-        path: /home/gpadmin/gpconfigs
-        state: absent
-      ignore_errors: yes
-
-    - name: Check for remaining gpadmin processes
-      shell: ps aux | grep gpadmin | grep -v grep || true
-      register: gpadmin_processes
-      changed_when: false
-      ignore_errors: yes
-
-    - name: Display warning if gpadmin processes still running
-      debug:
-        msg: "WARNING: Found running gpadmin processes: {{ gpadmin_processes.stdout_lines }}"
-      when: gpadmin_processes.stdout != ""
-
-    - name: Check for remaining data in /data
-      shell: find /data -type f 2>/dev/null | head -10 || true
-      register: remaining_data
-      changed_when: false
-      ignore_errors: yes
-
-    - name: Display warning if data remains
-      debug:
-        msg: "WARNING: Found remaining files in /data: {{ remaining_data.stdout_lines }}"
-      when: remaining_data.stdout != ""
-
-    - name: Verify gpadmin user removed
-      shell: id gpadmin 2>&1
-      register: gpadmin_check
+        - '^.*warehousepg.*$'
+        - '^.*whpg.*$'
+        - '^.*-repl$'
       failed_when: false
+
+    - name: Remove any leftover temporary files
+      ansible.builtin.shell: rm -rf /tmp/.s.PGSQL* /tmp/warehousepg* /tmp/gp* 2>/dev/null || true
       changed_when: false
-      ignore_errors: yes
+      failed_when: false
 
-    - name: Verify WarehousePG packages removed
-      shell: rpm -qa | grep -i warehouse || true
-      register: package_check
-      changed_when: false
-      ignore_errors: yes
-
-    - name: Verify installation directories removed
-      stat:
-        path: "{{ item }}"
-      register: install_dir_check
-      loop:
-        - /usr/local/greenplum-db
-        - /usr/local/greenplum-db-7.3.0-WHPG
-      ignore_errors: yes
-
-    - name: Verify data directories removed
-      stat:
-        path: "{{ item }}"
-      register: data_dir_check
-      loop:
-        - /data/coordinator
-        - /data/primary
-        - /data/mirror
-      ignore_errors: yes
-
-    - name: Verify no PostgreSQL lock files remain
-      shell: ls /tmp/.s.PGSQL.* 2>/dev/null || true
-      register: lock_check
-      changed_when: false
-      ignore_errors: yes
-
-    - name: Display verification results
-      debug:
+    - name: Display cleanup summary
+      ansible.builtin.debug:
         msg:
-          - "========================================="
-          - "Cleanup Verification for {{ inventory_hostname }}"
-          - "========================================="
-          - "✓ gpadmin user: {{ 'REMOVED' if gpadmin_check.rc != 0 else '⚠ STILL EXISTS' }}"
-          - "✓ WarehousePG packages: {{ 'REMOVED' if package_check.stdout == '' else '⚠ FOUND: ' + package_check.stdout }}"
-          - "✓ Installation directories: {{ 'REMOVED' if install_dir_check.results | selectattr('stat.exists') | list | length == 0 else '⚠ SOME EXIST' }}"
-          - "✓ Data directories: {{ 'REMOVED' if data_dir_check.results | selectattr('stat.exists') | list | length == 0 else '⚠ SOME EXIST' }}"
-          - "✓ PostgreSQL locks: {{ 'CLEAN' if lock_check.stdout == '' else '⚠ FOUND: ' + lock_check.stdout }}"
-          - "✓ gpadmin processes: {{ 'CLEAN' if gpadmin_processes.stdout == '' else '⚠ RUNNING' }}"
-          - "========================================="
+          - "======================================================"
+          - "Cleanup Summary for {{ inventory_hostname }}"
+          - "======================================================"
+          - "Service stopped: {{ 'yes' if service_stop is defined and service_stop.changed | default(false) else 'N/A or already stopped' }}"
+          - "Directories removed: {{ dir_removal.results | selectattr('changed', 'defined') | selectattr('changed') | list | length }}/{{ whpg_data_directories | length }}"
+          - "Packages removed: {{ 'yes' if package_removal.changed | default(false) else 'N/A or already removed' }}"
+          - "Users removed: {{ user_removal.results | selectattr('changed', 'defined') | selectattr('changed') | list | length }}/{{ whpg_users | length }}"
+          - "======================================================"
 
-    - name: Reset sysctl parameters (optional - comment out if you want to keep OS tuning)
-      sysctl:
-        name: "{{ item.name }}"
-        state: absent
-        reload: yes
-      loop:
-        - { name: 'kernel.shmmax' }
-        - { name: 'kernel.shmmni' }
-        - { name: 'kernel.shmall' }
-        - { name: 'kernel.sem' }
-        - { name: 'kernel.msgmnb' }
-        - { name: 'kernel.msgmax' }
-        - { name: 'kernel.msgmni' }
-        - { name: 'net.ipv4.tcp_syncookies' }
-        - { name: 'net.core.netdev_max_backlog' }
-        - { name: 'net.ipv4.ip_local_port_range' }
-      ignore_errors: yes
-      when: false  # Set to true if you want to reset sysctl
-
-    - name: Remove limits.d configuration
-      file:
-        path: /etc/security/limits.d/99-warehousepg.conf
-        state: absent
-      ignore_errors: yes
-
-    - name: Remove systemd configuration
-      file:
-        path: /etc/systemd/system.conf.d/warehousepg.conf
-        state: absent
-      ignore_errors: yes
-      notify: reload systemd
-
-    - name: Display cleanup status
-      debug:
-        msg:
-          - "========================================="
-          - "Cleanup completed on {{ inventory_hostname }}"
-          - "========================================="
-          - "- WarehousePG processes stopped"
-          - "- Data directories removed"
-          - "- Installation directories removed"
-          - "- gpadmin user removed"
-          - "- SSH keys removed"
-          - "- PostgreSQL lock files removed"
-          - "- Configuration files cleaned"
-          - ""
-
-          - "Greenplum coordinator and standby data directories removed."
-          - "Mirror segment directories cleaned."
-
-
-# These tasks are already covered in previous cleanup plays. Remove this duplicate block.
-
-- name: Final Cleanup Summary
-  hosts: localhost
-  gather_facts: no
-  tags: [cleanup, summary]
-  
-  tasks:
-    - name: Display final summary
-      debug:
-        msg:
-          - "========================================="
-          - "Complete Cleanup Finished"
-          - "========================================="
-          - ""
-          - "All WarehousePG components have been removed from:"
-          - "  - Primary Site: {{ groups['whpg_primary_site'] | join(', ') }}"
-          - "  - DR Site: {% if groups['whpg_dr_site'] is defined %}{{ groups['whpg_dr_site'] | join(', ') }}{% else %}N/A{% endif %}"
-          - ""
-          - "Verification completed on all hosts."
-          - "Check the 'Cleanup Verification' output above for details."
-          - ""
-          - "Next Steps:"
-          - "  1. Run: ansible-playbook -i test_inventory.yml quick_install.yml"
-          - "  2. Run: ansible-playbook -i test_inventory.yml dr_setup.yml"
-          - ""
-          - "Note: OS-level configurations (sysctl, limits) were preserved."
-          - "      To reset those too, edit cleanup_all.yml and set 'when: true'"
+    - name: Reboot hosts (optional)
+      ansible.builtin.reboot:
+        reboot_timeout: 300
+      when: whpg_reboot_after_cleanup | default(false)

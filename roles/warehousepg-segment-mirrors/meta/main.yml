@@ -21,4 +21,6 @@ galaxy_info:
     - mirrors
     - ha
 
-dependencies: []
+dependencies:
+  # Cluster must be initialized before adding mirrors
+  - role: warehousepg-init

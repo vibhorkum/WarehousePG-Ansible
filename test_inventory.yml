@@ -4,9 +4,9 @@ all:
     # SSH Configuration - Update these values for your environment
     # ============================================================
     ansible_user: rocky  # Change to your SSH user (ec2-user, ubuntu, rocky, etc.)
-    ansible_ssh_private_key_file: /Users/vibhor.kumar/.ssh/Vibhor-Pioneer-AWS-Key.pem
-    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o ConnectTimeout=30'
-    
+    # ansible_ssh_private_key_file: /path/to/your/ssh/private_key.pem  # Uncomment and set your key path
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30'
+
     # ============================================================
     # Mirror Configuration
     # ============================================================
@@ -15,53 +15,65 @@ all:
     #   - 'spread'       : Mirrors spread across segment hosts (requires 2+ segment hosts)
     #   - 'remote_hosts' : Mirrors on dedicated hosts (requires whpg_mirror_segments group)
     # whpg_mirror_mode is now set in playbook/role defaults for gpinitsystem compatibility
-    
+
     # Force recreate storage directories
     whpg_force_create: true
-    
+
   children:
     # ============================================================
-    # PRIMARY SITE (Site 1 - US East 2)
+    # PRIMARY SITE
     # ============================================================
-    # Subnets: 10.0.2.0/24 (coordinator), 10.0.9.0/24 (segments)
     whpg_primary_site:
       children:
         whpg_primary_coordinator:
           hosts:
-            whpg-coordinator:
-              ansible_host: 3.22.42.68       # Public IP for SSH
-              private_ip: 10.0.2.40          # Private IP for cluster communication
+            whpg-coordinator-site1:
+              ansible_host: 3.22.42.68
+              private_ip: 10.0.2.40
               hostname: whpg-coordinator
               site_name: site1
               replication_alias: site1-coordinator-repl
 
         whpg_primary_segments:
           hosts:
-            whpg-segment:
-              ansible_host: 18.226.172.107   # Public IP for SSH
-              private_ip: 10.0.9.61          # Private IP for cluster communication
+            whpg-segment-site1:
+              ansible_host: 18.226.172.107
+              private_ip: 10.0.9.61
               hostname: whpg-segment
               site_name: site1
               replication_alias: site1-segment-repl
 
-        # Coordinator standby group (same host as coordinator)
         whpg_coordinator_standby:
           hosts:
-            whpg-coordinator-standby:
+            whpg-coordinator-standby-site1:
               ansible_host: 3.22.42.68
               private_ip: 10.0.2.40
+              hostname: whpg-coordinator-standby
               site_name: site1
               replication_alias: site1-coordinator-standby-repl
               primary_coordinator: site1-coordinator-repl
 
     # ============================================================
-    # MIRROR SEGMENTS (only needed for remote_hosts mode)
+    # DR SITE (Disaster Recovery)
     # ============================================================
-    # Uncomment and configure if using whpg_mirror_mode: "remote_hosts"
-    # whpg_mirror_segments:
-    #   hosts:
-    #     mirror-segment1:
-    #       ansible_host: 10.0.3.11         # Public IP for SSH
-    #       private_ip: 10.0.3.11           # Private IP for cluster
-    #       hostname: mirror-segment1
-    #       replication_alias: mirror1-repl
+    whpg_dr_site:
+      children:
+        whpg_dr_coordinator:
+          hosts:
+            whpg-coordinator-site2:
+              ansible_host: 3.137.161.206
+              private_ip: 10.0.10.232
+              hostname: whpg-coordinator
+              site_name: site2
+              replication_alias: site2-coordinator-repl
+              replication_server: site1-coordinator-repl
+
+        whpg_dr_segments:
+          hosts:
+            whpg-segment-site2:
+              ansible_host: 3.139.108.84
+              private_ip: 10.0.12.215
+              hostname: whpg-segment
+              site_name: site2
+              replication_alias: site2-segment-repl
+              replication_server: site1-segment-repl
