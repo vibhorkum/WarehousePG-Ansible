@@ -1,32 +1,46 @@
 ---
 # WarehousePG DR Site Setup Playbook
-# This playbook:
-#   1. Configures OS settings on DR site hosts
-#   2. Installs WarehousePG on DR site hosts
-#   3. Creates storage directories on DR site hosts
-#   4. Sets up replication from primary to DR site
+#
+# This playbook provides complete DR site setup:
+#   Phase 1: OS configuration on DR hosts
+#   Phase 2: WarehousePG package installation
+#   Phase 3: Storage directory creation
+#   Phase 4: Cross-site /etc/hosts and SSH configuration
+#   Phase 5: Hot standby replication setup (optional)
 #
 # Usage:
+#   # Full DR setup (OS, install, storage, SSH)
 #   ansible-playbook -i test_inventory.yml dr_setup.yml
-#   ansible-playbook -i test_inventory.yml dr_setup.yml --tags standby  # Standby only
-#   ansible-playbook -i test_inventory.yml dr_setup.yml --tags mirrors  # Mirrors only
-#   ansible-playbook -i test_inventory.yml dr_setup.yml --tags install  # Installation only
+#
+#   # Installation only
+#   ansible-playbook -i test_inventory.yml dr_setup.yml --tags install
+#
+#   # Hot standby setup only (requires primary cluster running)
+#   ansible-playbook -i test_inventory.yml dr_setup.yml --tags hot-standby
+#
+#   # Rebuild existing standby
+#   ansible-playbook -i test_inventory.yml dr_setup.yml --tags hot-standby -e whpg_rebuild_standby=true
 
+# =============================================================================
 # Phase 1: Configure OS on DR site hosts
+# =============================================================================
 - name: Configure Operating System on DR Site
   hosts: whpg_dr_site
   become: yes
   gather_facts: yes
-  
+  tags: [os, install, prepare]
+
   roles:
     - role: warehousepg-os-config
-      tags: [os, install]
 
+# =============================================================================
 # Phase 2: Install WarehousePG on DR site hosts
+# =============================================================================
 - name: Install WarehousePG on DR Site
   hosts: whpg_dr_site
   become: yes
   gather_facts: yes
+  tags: [install, packages, prepare]
 
   pre_tasks:
     - name: Validate EDB subscription token is provided
@@ -46,58 +60,379 @@
 
   roles:
     - role: warehousepg-install
-      tags: [install, packages]
 
+# =============================================================================
 # Phase 3: Setup storage on DR site hosts
+# =============================================================================
 - name: Setup Storage on DR Site
   hosts: whpg_dr_site
   become: yes
   gather_facts: yes
-  
+  tags: [storage, install, prepare]
+
   vars:
-    # Storage directories - should match primary site
     whpg_data_directories:
       - /data/primary/seg1
       - /data/primary/seg2
     whpg_mirror_data_directories:
       - /data/mirror/seg1
       - /data/mirror/seg2
-    # Coordinator storage - used by storage role
     whpg_coordinator_storage: /data/coordinator
-    # Force creation on DR site (fresh install)
     whpg_force_create: true
-    # Enable directory creation flags
     whpg_create_coordinator_dirs: true
     whpg_create_primary_dirs: true
     whpg_create_mirror_dirs: true
-  
+
   roles:
     - role: warehousepg-storage
-      tags: [storage, install]
 
-# Phase 3b: Update /etc/hosts on primary site with DR site aliases for replication
+# =============================================================================
+# Phase 4a: Update /etc/hosts on primary site with DR aliases
+# =============================================================================
 - name: Configure /etc/hosts on Primary Site for Cross-Site Replication
   hosts: whpg_primary_site
   become: yes
   gather_facts: yes
-  
+  tags: [hosts, install, prepare]
+
   tasks:
     - name: Update /etc/hosts with all site information
       include_role:
         name: warehousepg-install
         tasks_from: configure_hosts
-      tags: [hosts, install]
 
-# Phase 3c: Setup passwordless SSH between primary and DR sites
+# =============================================================================
+# Phase 4b: Setup passwordless SSH between primary and DR sites
+# =============================================================================
 - name: Configure Cross-Site SSH for DR Replication
   hosts: whpg_primary_site:whpg_dr_site
   become: yes
   gather_facts: yes
-  
+  tags: [ssh, install, prepare]
+
   tasks:
     - name: Setup passwordless SSH for gpadmin across all sites
       include_role:
         name: warehousepg-install
         tasks_from: passwordless_ssh
-      tags: [ssh, install]
 
+# =============================================================================
+# Phase 5: Hot Standby Replication Setup
+# =============================================================================
+- name: Build DR Hot Standby (coordinator + segments)
+  hosts: whpg_dr_site
+  gather_facts: true
+  any_errors_fatal: true
+  tags: [hot-standby, replication, never]
+
+  vars:
+    gp_user: "{{ whpg_gpadmin_user | default('gpadmin') }}"
+    gp_env: "{{ whpg_install_path | default('/usr/local/greenplum-db-7.3.0-WHPG') }}/greenplum_path.sh"
+    gp_bin: "{{ whpg_install_path | default('/usr/local/greenplum-db-7.3.0-WHPG') }}/bin"
+    repl_user: "{{ whpg_replication_user | default(gp_user) }}"
+    rebuild_standby: "{{ whpg_rebuild_standby | default(false) | bool }}"
+    ssh_opts: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+  tasks:
+    # ---------------------------------
+    # Resolve PRIMARY peer from replication_server mapping
+    # ---------------------------------
+    - name: Assert replication_server defined on DR host
+      ansible.builtin.assert:
+        that:
+          - hostvars[inventory_hostname].replication_server is defined
+          - (hostvars[inventory_hostname].replication_server | length) > 0
+        fail_msg: "DR host {{ inventory_hostname }} missing replication_server in inventory."
+
+    - name: Resolve primary_peer host
+      ansible.builtin.set_fact:
+        primary_peer: "{{ item }}"
+      loop: "{{ groups['whpg_primary_site'] | default([]) }}"
+      when: (hostvars[item].replication_alias | default('')) == hostvars[inventory_hostname].replication_server
+      changed_when: false
+
+    - name: Assert primary_peer resolved
+      ansible.builtin.assert:
+        that:
+          - primary_peer is defined
+          - (primary_peer | length) > 0
+        fail_msg: >-
+          Could not resolve primary peer for {{ inventory_hostname }}.
+          replication_server={{ hostvars[inventory_hostname].replication_server }} not found.
+
+    - name: Set primary_connect_host
+      ansible.builtin.set_fact:
+        primary_connect_host: "{{ hostvars[inventory_hostname].replication_server }}"
+      changed_when: false
+
+    # ---------------------------------
+    # Build DR instances list
+    # ---------------------------------
+    - name: Initialize DR instances list
+      ansible.builtin.set_fact:
+        dr_instances: []
+      changed_when: false
+
+    - name: Add DR coordinator instance
+      ansible.builtin.set_fact:
+        dr_instances: >-
+          {{ dr_instances + [{
+            'kind': 'coordinator',
+            'name': 'coordinator',
+            'src_hostname': hostvars[primary_peer].hostname,
+            'port': (whpg_coordinator_port | default(5432) | int),
+            'datadir': whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1'),
+            'conf': (whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1')) ~ '/postgresql.conf',
+            'archive_dir': whpg_archive_base | default('/data/archived_wals') ~ '/coordinator',
+            'restore_src_host': primary_connect_host
+          }] }}
+      when: inventory_hostname in (groups['whpg_dr_coordinator'] | default([]))
+
+    - name: Add DR segment instances
+      ansible.builtin.set_fact:
+        dr_instances: >-
+          {{ dr_instances + [{
+            'kind': 'primary_segment',
+            'name': 'seg' ~ (idx + 1),
+            'src_hostname': hostvars[primary_peer].hostname,
+            'port': (whpg_segment_port_base | default(6000) | int) + idx,
+            'datadir': (whpg_data_directories[idx]) ~ '/gpseg' ~ idx,
+            'conf': (whpg_data_directories[idx]) ~ '/gpseg' ~ idx ~ '/postgresql.conf',
+            'archive_dir': whpg_archive_base | default('/data/archived_wals') ~ '/seg' ~ (idx + 1),
+            'restore_src_host': primary_connect_host
+          }] }}
+      loop: "{{ range(0, (whpg_data_directories | default(['/data/primary/seg1', '/data/primary/seg2']) | length)) | list }}"
+      loop_control:
+        loop_var: idx
+      when: inventory_hostname in (groups['whpg_dr_segments'] | default([]))
+
+    - name: Assert DR instances discovered
+      ansible.builtin.assert:
+        that:
+          - dr_instances | length > 0
+        fail_msg: "No DR instances discovered on {{ inventory_hostname }}."
+
+    # ---------------------------------
+    # Pre-check: can DR reach primary ports?
+    # ---------------------------------
+    - name: Check primary port reachability (pg_isready)
+      become: true
+      become_user: "{{ gp_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        source "{{ gp_env }}"
+        pg_isready -h "{{ item.restore_src_host }}" -p "{{ item.port }}" -t 3
+      args:
+        executable: /bin/bash
+      loop: "{{ dr_instances }}"
+      register: isready_results
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if primary unreachable
+      ansible.builtin.fail:
+        msg: "Primary ports unreachable from DR: {{ isready_results.results | selectattr('rc', 'ne', 0) | map(attribute='item.name') | list }}"
+      when: (isready_results.results | selectattr('rc', 'ne', 0) | list | length) > 0
+
+    # ---------------------------------
+    # Lookup dbid from PRIMARY coordinator
+    # ---------------------------------
+    - name: Set primary coordinator host
+      ansible.builtin.set_fact:
+        primary_coord_host: "{{ groups['whpg_primary_coordinator'][0] }}"
+      changed_when: false
+
+    - name: Lookup PRIMARY dbid for each instance
+      become: true
+      become_user: "{{ gp_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        source "{{ gp_env }}"
+        export COORDINATOR_DATA_DIRECTORY="{{ hostvars[primary_coord_host].whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}"
+        psql -d postgres -tAc "
+          SELECT dbid FROM gp_segment_configuration
+          WHERE role='p' AND hostname='{{ item.src_hostname }}' AND port={{ item.port }}
+          LIMIT 1;
+        "
+      args:
+        executable: /bin/bash
+      delegate_to: "{{ primary_coord_host }}"
+      loop: "{{ dr_instances }}"
+      register: dbid_lookup
+      changed_when: false
+
+    - name: Enrich dr_instances with dbid
+      ansible.builtin.set_fact:
+        dr_instances: "{{ dr_instances | zip(dbid_lookup.results) | map('combine', attribute='1.stdout') | list }}"
+      vars:
+        _enriched: []
+      changed_when: false
+
+    - name: Rebuild dr_instances with dbid
+      ansible.builtin.set_fact:
+        dr_instances_enriched: "{{ (dr_instances_enriched | default([])) + [item.0 | combine({'dbid': (item.1.stdout | trim)})] }}"
+      loop: "{{ dr_instances | zip(dbid_lookup.results) | list }}"
+      changed_when: false
+
+    - name: Use enriched instances
+      ansible.builtin.set_fact:
+        dr_instances: "{{ dr_instances_enriched }}"
+      changed_when: false
+
+    - name: Assert dbid found for all instances
+      ansible.builtin.assert:
+        that:
+          - item.dbid is defined
+          - (item.dbid | string | length) > 0
+        fail_msg: "Could not find dbid for {{ item.name }}"
+      loop: "{{ dr_instances }}"
+
+    # ---------------------------------
+    # Stop DR cluster (if running)
+    # ---------------------------------
+    - name: Stop DR cluster (gpstop -a)
+      become: true
+      become_user: "{{ gp_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        source "{{ gp_env }}"
+        export COORDINATOR_DATA_DIRECTORY="{{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}"
+        "{{ gp_bin }}/gpstop" -a || true
+      args:
+        executable: /bin/bash
+      when: inventory_hostname in (groups['whpg_dr_coordinator'] | default([]))
+      changed_when: false
+
+    # ---------------------------------
+    # Prepare directories
+    # ---------------------------------
+    - name: Ensure parent directories exist
+      become: true
+      ansible.builtin.file:
+        path: "{{ item.datadir | dirname }}"
+        state: directory
+        owner: "{{ gp_user }}"
+        group: "{{ gp_user }}"
+        mode: "0700"
+      loop: "{{ dr_instances }}"
+
+    - name: Wipe datadirs if rebuild requested
+      become: true
+      ansible.builtin.file:
+        path: "{{ item.datadir }}"
+        state: absent
+      loop: "{{ dr_instances }}"
+      when: rebuild_standby
+
+    - name: Ensure empty datadirs exist
+      become: true
+      ansible.builtin.file:
+        path: "{{ item.datadir }}"
+        state: directory
+        owner: "{{ gp_user }}"
+        group: "{{ gp_user }}"
+        mode: "0700"
+      loop: "{{ dr_instances }}"
+
+    # ---------------------------------
+    # Run pg_basebackup with --target-gp-dbid
+    # ---------------------------------
+    - name: Run pg_basebackup to create standby
+      become: true
+      become_user: "{{ gp_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        source "{{ gp_env }}"
+
+        if [ -n "$(ls -A "{{ item.datadir }}" 2>/dev/null || true)" ]; then
+          echo "Datadir {{ item.datadir }} not empty. Use -e whpg_rebuild_standby=true"
+          exit 22
+        fi
+
+        pg_basebackup \
+          -h "{{ item.restore_src_host }}" \
+          -p "{{ item.port }}" \
+          -U "{{ repl_user }}" \
+          -D "{{ item.datadir }}" \
+          -X stream \
+          -R \
+          -c fast \
+          --target-gp-dbid "{{ item.dbid }}"
+      args:
+        executable: /bin/bash
+      loop: "{{ dr_instances }}"
+
+    # ---------------------------------
+    # Configure hot standby
+    # ---------------------------------
+    - name: Enable hot_standby
+      become: true
+      ansible.builtin.lineinfile:
+        path: "{{ item.conf }}"
+        regexp: "^[#\\s]*hot_standby\\s*="
+        line: "hot_standby = on"
+        insertafter: EOF
+        create: yes
+      loop: "{{ dr_instances }}"
+
+    - name: Set restore_command (rsync WAL from primary)
+      become: true
+      ansible.builtin.lineinfile:
+        path: "{{ item.conf }}"
+        regexp: "^[#\\s]*restore_command\\s*="
+        line: "restore_command = 'rsync -a --ignore-missing-args -e \"ssh {{ ssh_opts }}\" {{ gp_user }}@{{ item.restore_src_host }}:{{ item.archive_dir }}/%f %p'"
+        insertafter: EOF
+        create: yes
+      loop: "{{ dr_instances }}"
+
+    # ---------------------------------
+    # Start DR cluster
+    # ---------------------------------
+    - name: Start DR cluster (gpstart -a)
+      become: true
+      become_user: "{{ gp_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        source "{{ gp_env }}"
+        export COORDINATOR_DATA_DIRECTORY="{{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}"
+        "{{ gp_bin }}/gpstart" -a
+      args:
+        executable: /bin/bash
+      when: inventory_hostname in (groups['whpg_dr_coordinator'] | default([]))
+
+    - name: Validate DR is in recovery mode
+      become: true
+      become_user: "{{ gp_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        source "{{ gp_env }}"
+        export COORDINATOR_DATA_DIRECTORY="{{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}"
+        psql -d postgres -tAc "SELECT pg_is_in_recovery();"
+      args:
+        executable: /bin/bash
+      register: dr_recovery
+      changed_when: false
+      when: inventory_hostname in (groups['whpg_dr_coordinator'] | default([]))
+
+    - name: Assert DR is hot standby
+      ansible.builtin.assert:
+        that:
+          - (dr_recovery.stdout | trim) == "t"
+        fail_msg: "DR coordinator is NOT in recovery mode."
+      when: inventory_hostname in (groups['whpg_dr_coordinator'] | default([]))
+
+    - name: Display hot standby setup complete
+      ansible.builtin.debug:
+        msg:
+          - "======================================================"
+          - "DR Hot Standby Setup Complete"
+          - "======================================================"
+          - "DR coordinator is in recovery mode (hot standby)"
+          - "Streaming replication from primary site is active"
+          - ""
+          - "Verification commands:"
+          - "  gpstate -f  # Check standby status"
+          - "  gpstate -m  # Check mirror status"
+          - "======================================================"
+      when: inventory_hostname in (groups['whpg_dr_coordinator'] | default([]))
+      run_once: true

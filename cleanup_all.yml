@@ -1,107 +1,256 @@
 ---
-# Playbook: cleanup_all.yml
-# Description: Cleans up all WarehousePG components, including data directories, users, packages, and configuration files.
-# Usage: ansible-playbook -i test_inventory.yml cleanup_all.yml
+# cleanup_all.yml
+# Complete cleanup for WarehousePG cluster (Primary + DR sites)
+#
+# Usage:
+#   # Dry run (shows what will be removed)
+#   ansible-playbook -i test_inventory.yml cleanup_all.yml
+#
+#   # Actual cleanup (requires confirmation)
+#   ansible-playbook -i test_inventory.yml cleanup_all.yml -e cleanup_confirm=true
+#
+#   # With package removal
+#   ansible-playbook -i test_inventory.yml cleanup_all.yml -e cleanup_confirm=true -e cleanup_remove_packages=true
+#
+#   # Clean SSH keys too (for full reset)
+#   ansible-playbook -i test_inventory.yml cleanup_all.yml -e cleanup_confirm=true -e cleanup_remove_gpadmin_ssh=true
+#
+# Options:
+#   cleanup_confirm: true/false (REQUIRED for actual cleanup)
+#   cleanup_remove_packages: true/false (default: false)
+#   cleanup_remove_gpadmin_ssh: true/false (default: false)
+#   cleanup_remove_gpadmin_logs: true/false (default: true)
 
-- name: Cleanup WarehousePG Cluster
-  hosts: all
-  become: yes
+# -----------------------------
+# Play 1: Stop Primary (Site1) cluster
+# -----------------------------
+- name: Stop WarehousePG on Primary Site
+  hosts: whpg_primary_coordinator
+  gather_facts: false
+  any_errors_fatal: false
   vars:
-    whpg_data_directories:
-      - /data/warehousepg
-      - /data/warehousepg_mirrors
-      - /data/warehousepg_segments
-      - /data/warehousepg_coordinator
-      - /data/warehousepg_standby
-      - /data/coordinator
-      - /data/primary
-      - /data/mirror
-    whpg_users:
-      - gpadmin
-      - postgres
+    cleanup_confirm: "{{ cleanup_confirm | default(false) | bool }}"
+    whpg_install_path: "{{ whpg_install_path | default('/usr/local/greenplum-db-7.3.0-WHPG') }}"
+    whpg_coordinator_data_directory: "{{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}"
+
+  tasks:
+    - name: Safety gate - require explicit confirmation
+      ansible.builtin.assert:
+        that: cleanup_confirm | bool
+        fail_msg: |
+          SAFETY CHECK FAILED: Cleanup requires explicit confirmation.
+          Pass -e cleanup_confirm=true to proceed with cleanup.
+          This will DESTROY all WarehousePG data!
+      run_once: true
+
+    - name: Stop Primary cluster gracefully (gpstop -a)
+      become: true
+      become_user: gpadmin
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ -f "{{ whpg_install_path }}/greenplum_path.sh" ]; then
+          source "{{ whpg_install_path }}/greenplum_path.sh"
+          export COORDINATOR_DATA_DIRECTORY="{{ whpg_coordinator_data_directory }}"
+          if [ -d "{{ whpg_coordinator_data_directory }}" ]; then
+            "{{ whpg_install_path }}/bin/gpstop" -a || true
+          fi
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+      run_once: true
+
+# -----------------------------
+# Play 2: Stop DR (Site2) cluster
+# -----------------------------
+- name: Stop WarehousePG on DR Site
+  hosts: whpg_dr_coordinator
+  gather_facts: false
+  any_errors_fatal: false
+  vars:
+    cleanup_confirm: "{{ cleanup_confirm | default(false) | bool }}"
+    whpg_install_path: "{{ whpg_install_path | default('/usr/local/greenplum-db-7.3.0-WHPG') }}"
+    whpg_coordinator_data_directory: "{{ whpg_coordinator_data_directory | default('/data/coordinator/gpseg-1') }}"
+
+  tasks:
+    - name: Safety gate
+      ansible.builtin.assert:
+        that: cleanup_confirm | bool
+        fail_msg: "Cleanup requires -e cleanup_confirm=true"
+      run_once: true
+
+    - name: Stop DR cluster gracefully (gpstop -a)
+      become: true
+      become_user: gpadmin
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ -f "{{ whpg_install_path }}/greenplum_path.sh" ]; then
+          source "{{ whpg_install_path }}/greenplum_path.sh"
+          export COORDINATOR_DATA_DIRECTORY="{{ whpg_coordinator_data_directory }}"
+          if [ -d "{{ whpg_coordinator_data_directory }}" ]; then
+            "{{ whpg_install_path }}/bin/gpstop" -a || true
+          fi
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+      run_once: true
+
+# -----------------------------
+# Play 3: Clean up all hosts (Primary + DR)
+# -----------------------------
+- name: Cleanup WarehousePG on all hosts
+  hosts: whpg_primary_site:whpg_dr_site
+  gather_facts: true
+  any_errors_fatal: false
+
+  vars:
+    cleanup_confirm: "{{ cleanup_confirm | default(false) | bool }}"
+    cleanup_remove_packages: "{{ cleanup_remove_packages | default(false) | bool }}"
+    cleanup_remove_gpadmin_ssh: "{{ cleanup_remove_gpadmin_ssh | default(false) | bool }}"
+    cleanup_remove_gpadmin_logs: "{{ cleanup_remove_gpadmin_logs | default(true) | bool }}"
+
+    # Paths
+    whpg_install_path: "{{ whpg_install_path | default('/usr/local/greenplum-db-7.3.0-WHPG') }}"
+    whpg_storage_base: "{{ whpg_storage_base | default('/data') }}"
+    whpg_archive_base: "{{ whpg_archive_base | default('/data/archived_wals') }}"
+    whpg_gpadmin_home: "{{ whpg_gpadmin_home | default('/home/gpadmin') }}"
+
+    # Data directories to remove
+    whpg_cleanup_directories:
+      - "{{ whpg_storage_base }}/coordinator"
+      - "{{ whpg_storage_base }}/primary"
+      - "{{ whpg_storage_base }}/mirror"
+      - "{{ whpg_storage_base }}/standby_coordinator"
+      - "{{ whpg_archive_base }}"
+
+    # Packages to remove
     whpg_packages:
       - warehouse-pg-7
       - warehouse-pg-clients
       - whpg-backup
-  tasks:
-    - name: Check if warehousepg service exists
-      ansible.builtin.command: systemctl status warehousepg
-      register: service_check
-      changed_when: false
-      failed_when: false
 
-    - name: Stop WarehousePG services
-      ansible.builtin.service:
-        name: warehousepg
-        state: stopped
-      when: service_check.rc == 0
-      register: service_stop
-      failed_when: false
+  tasks:
+    - name: Safety gate
+      ansible.builtin.assert:
+        that: cleanup_confirm | bool
+        fail_msg: "Cleanup requires -e cleanup_confirm=true"
+      run_once: true
+
+    - name: Display cleanup plan for this host
+      ansible.builtin.debug:
+        msg:
+          - "======================================================"
+          - "Cleanup Plan for {{ inventory_hostname }}"
+          - "======================================================"
+          - "Site: {{ hostvars[inventory_hostname].site_name | default('unknown') }}"
+          - "Directories to remove: {{ whpg_cleanup_directories }}"
+          - "Remove packages: {{ cleanup_remove_packages }}"
+          - "Remove gpadmin logs: {{ cleanup_remove_gpadmin_logs }}"
+          - "Remove gpadmin SSH keys: {{ cleanup_remove_gpadmin_ssh }}"
+          - "======================================================"
 
     - name: Kill any remaining postgres processes
-      ansible.builtin.shell: pkill -9 -u gpadmin postgres || true
+      become: true
+      ansible.builtin.shell: |
+        # Stop any postmaster processes in known data directories
+        for d in \
+          "/data/coordinator/gpseg-1" \
+          "/data/standby_coordinator/gpseg-1" \
+          "/data/primary/seg1/gpseg0" \
+          "/data/primary/seg2/gpseg1" \
+          "/data/mirror/seg1/gpseg0" \
+          "/data/mirror/seg2/gpseg1"
+        do
+          if [ -d "$d" ] && [ -f "$d/postmaster.pid" ]; then
+            if [ -f "{{ whpg_install_path }}/bin/pg_ctl" ]; then
+              "{{ whpg_install_path }}/bin/pg_ctl" -D "$d" -m fast stop 2>/dev/null || true
+            fi
+          fi
+        done
+        # Force kill any remaining processes
+        pkill -9 -u gpadmin postgres 2>/dev/null || true
+      args:
+        executable: /bin/bash
       changed_when: false
       failed_when: false
 
-    - name: Remove WarehousePG data directories
+    - name: Remove data directories
+      become: true
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
-      loop: "{{ whpg_data_directories }}"
+      loop: "{{ whpg_cleanup_directories }}"
       register: dir_removal
-      failed_when: false
 
-    - name: Remove WarehousePG packages
+    - name: Remove gpadmin logs (optional)
+      become: true
+      ansible.builtin.file:
+        path: "{{ whpg_gpadmin_home }}/gpAdminLogs"
+        state: absent
+      when: cleanup_remove_gpadmin_logs
+
+    - name: Remove gpadmin config directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ whpg_gpadmin_home }}/gpconfigs"
+        state: absent
+
+    - name: Remove gpadmin SSH keys (optional)
+      become: true
+      ansible.builtin.file:
+        path: "{{ whpg_gpadmin_home }}/.ssh"
+        state: absent
+      when: cleanup_remove_gpadmin_ssh
+
+    - name: Remove WarehousePG packages (optional)
+      become: true
       ansible.builtin.dnf:
         name: "{{ whpg_packages }}"
         state: absent
+      when: cleanup_remove_packages
       register: package_removal
-      failed_when: false
 
-    - name: Remove EDB repository configuration
+    - name: Remove EDB repository (optional)
+      become: true
       ansible.builtin.file:
         path: /etc/yum.repos.d/enterprisedb-gpsupp.repo
         state: absent
-      failed_when: false
+      when: cleanup_remove_packages
 
-    - name: Remove WarehousePG users
-      ansible.builtin.user:
-        name: "{{ item }}"
-        state: absent
-        remove: yes
-        force: yes
-      loop: "{{ whpg_users }}"
-      register: user_removal
-      failed_when: false
-
-    - name: Remove configuration files
-      ansible.builtin.file:
-        path: /etc/warehousepg
-        state: absent
-      failed_when: false
-
-    - name: Remove greenplum installation directory
+    - name: Remove greenplum installation directory (optional)
+      become: true
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
       loop:
         - /usr/local/greenplum-db
         - /usr/local/greenplum-db-7.3.0-WHPG
+      when: cleanup_remove_packages
+
+    - name: Clean DNF cache (optional)
+      become: true
+      ansible.builtin.command: dnf clean all
+      changed_when: false
       failed_when: false
+      when: cleanup_remove_packages
 
     - name: Remove custom host entries
+      become: true
       ansible.builtin.lineinfile:
         path: /etc/hosts
         regexp: "{{ item }}"
         state: absent
       loop:
-        - '^.*warehousepg.*$'
         - '^.*whpg.*$'
         - '^.*-repl$'
       failed_when: false
 
-    - name: Remove any leftover temporary files
-      ansible.builtin.shell: rm -rf /tmp/.s.PGSQL* /tmp/warehousepg* /tmp/gp* 2>/dev/null || true
+    - name: Remove temporary files
+      become: true
+      ansible.builtin.shell: rm -rf /tmp/.s.PGSQL* /tmp/gp* 2>/dev/null || true
       changed_when: false
       failed_when: false
 
@@ -109,15 +258,8 @@
       ansible.builtin.debug:
         msg:
           - "======================================================"
-          - "Cleanup Summary for {{ inventory_hostname }}"
+          - "Cleanup Complete for {{ inventory_hostname }}"
           - "======================================================"
-          - "Service stopped: {{ 'yes' if service_stop is defined and service_stop.changed | default(false) else 'N/A or already stopped' }}"
-          - "Directories removed: {{ dir_removal.results | selectattr('changed', 'defined') | selectattr('changed') | list | length }}/{{ whpg_data_directories | length }}"
-          - "Packages removed: {{ 'yes' if package_removal.changed | default(false) else 'N/A or already removed' }}"
-          - "Users removed: {{ user_removal.results | selectattr('changed', 'defined') | selectattr('changed') | list | length }}/{{ whpg_users | length }}"
+          - "Directories removed: {{ dir_removal.results | selectattr('changed', 'defined') | selectattr('changed') | list | length }}/{{ whpg_cleanup_directories | length }}"
+          - "Packages removed: {{ 'Yes' if (package_removal.changed | default(false)) else 'Skipped' }}"
           - "======================================================"
-
-    - name: Reboot hosts (optional)
-      ansible.builtin.reboot:
-        reboot_timeout: 300
-      when: whpg_reboot_after_cleanup | default(false)
