@@ -86,11 +86,16 @@ ansible-playbook -i test_inventory.yml quick_install.yml \
 
 | Playbook | Purpose | Use When |
 |----------|---------|----------|
-| `quick_install.yml` | Complete installation: OS config, packages, storage | Fresh installation |
+| `quick_install.yml` | Complete installation: OS config, packages, storage, init | Fresh installation |
 | `init.yml` | Cluster initialization with gpinitsystem | After quick_install.yml or to reinitialize |
-| `dr_setup.yml` | Setup standby coordinator and segment mirrors on DR site | Adding DR to existing cluster |
+| `dr_setup.yml` | DR site setup + hot standby replication | Adding DR to existing cluster |
+| `setup_mirrors.yml` | Configure segment mirrors | Adding mirrors to existing cluster |
 | `validate.yml` | Performance testing with gpcheckperf | Validating hardware performance |
+| `health_check.yml` | Cluster health monitoring | Ongoing monitoring and diagnostics |
+| `failback.yml` | Return from DR to primary | After DR failover recovery |
 | `cleanup_all.yml` | Complete uninstallation and cleanup | Removing WarehousePG for fresh install |
+| `update_hba.yml` | Manage pg_hba.conf rules | Updating client authentication |
+| `update_archiving.yml` | Configure WAL archiving | Enabling point-in-time recovery |
 
 ### Playbook Details
 
@@ -100,8 +105,8 @@ Runs all roles in sequence:
 2. User creation and package installation
 3. Storage directory setup
 4. SSH key configuration
-
-**Does NOT** initialize the cluster - run `init.yml` afterward.
+5. Cluster initialization
+6. Mirror setup (if enabled)
 
 #### init.yml
 - Creates gpinitsystem configuration files
@@ -112,22 +117,74 @@ Runs all roles in sequence:
 **Can be run multiple times** with `whpg_force_init=true` to reinitialize.
 
 #### dr_setup.yml
-- Configures standby coordinator on DR site
-- Sets up segment mirrors on DR site
-- Configures streaming replication
-- Verifies replication status
+Complete DR site configuration with multiple phases:
+- Phase 1-3: OS config, package install, storage setup
+- Phase 4: Cross-site /etc/hosts and SSH configuration
+- Phase 5: Hot standby replication setup (use `--tags hot-standby`)
+
+```bash
+# Full DR preparation
+ansible-playbook -i inventory.yml dr_setup.yml
+
+# Hot standby setup only (requires running primary)
+ansible-playbook -i inventory.yml dr_setup.yml --tags hot-standby
+
+# Rebuild existing standby
+ansible-playbook -i inventory.yml dr_setup.yml --tags hot-standby -e whpg_rebuild_standby=true
+```
+
+#### setup_mirrors.yml
+Configure segment mirrors in various modes:
+- `same_host`: Mirrors on same servers as primaries
+- `spread`: Mirrors distributed across segment hosts
+- `remote_hosts`: Mirrors on dedicated separate hosts
 
 #### validate.yml
 - Network bandwidth tests between segments
 - Disk I/O performance validation
 - Memory bandwidth testing
 
+#### health_check.yml
+Comprehensive cluster monitoring:
+- Coordinator and segment status
+- Replication lag monitoring
+- Disk usage alerts
+- Connection pool status
+- Lock detection
+
+#### failback.yml
+Return control from DR to primary site:
+- Verifies site accessibility
+- Rebuilds primary as standby from DR
+- Promotes primary back to active role
+- Rebuilds DR as standby
+
 #### cleanup_all.yml
-- Terminates all WarehousePG processes
-- Removes systemd user sessions
-- Removes packages and data directories
-- Removes gpadmin user
-- Provides comprehensive verification output
+Complete cluster removal with safety gate:
+
+```bash
+# Preview what will be removed (dry run)
+ansible-playbook -i inventory.yml cleanup_all.yml
+
+# Actual cleanup (REQUIRED: confirmation flag)
+ansible-playbook -i inventory.yml cleanup_all.yml -e cleanup_confirm=true
+
+# With package removal
+ansible-playbook -i inventory.yml cleanup_all.yml -e cleanup_confirm=true -e cleanup_remove_packages=true
+
+# Full reset (including SSH keys)
+ansible-playbook -i inventory.yml cleanup_all.yml -e cleanup_confirm=true -e cleanup_remove_gpadmin_ssh=true
+```
+
+#### update_hba.yml
+- Applies pg_hba.conf rules across all instances
+- Configures client authentication
+- Reloads configuration automatically
+
+#### update_archiving.yml
+- Enables WAL archiving on all instances
+- Configures archive_command with rsync
+- Creates archive directories
 
 ## Configuration Guide
 
@@ -333,8 +390,8 @@ The number of directories determines segments per server.
 ### Re-initialization After Cleanup
 
 ```bash
-# 1. Clean up previous installation
-ansible-playbook -i test_inventory.yml cleanup_all.yml
+# 1. Clean up previous installation (requires confirmation)
+ansible-playbook -i test_inventory.yml cleanup_all.yml -e cleanup_confirm=true
 
 # 2. Reinstall
 ansible-playbook -i test_inventory.yml quick_install.yml
@@ -560,7 +617,7 @@ ls -la /usr/local/greenplum-db-7.3.0-WHPG
 **Solution:**
 ```bash
 # Clean reinstall
-ansible-playbook -i test_inventory.yml cleanup_all.yml
+ansible-playbook -i test_inventory.yml cleanup_all.yml -e cleanup_confirm=true
 ansible-playbook -i test_inventory.yml quick_install.yml
 ```
 
@@ -598,7 +655,7 @@ ps aux | grep postgres
 **Solution:**
 ```bash
 # Clean up lock files
-ansible-playbook -i test_inventory.yml cleanup_all.yml
+ansible-playbook -i test_inventory.yml cleanup_all.yml -e cleanup_confirm=true
 
 # Reinstall and initialize
 ansible-playbook -i test_inventory.yml quick_install.yml
@@ -703,11 +760,16 @@ See individual role README files for complete variable lists.
 
 ```
 WarehousePG-Ansible/
-├── quick_install.yml           # Main installation playbook
-├── init.yml                    # Cluster initialization
-├── dr_setup.yml                # DR setup playbook
-├── cleanup_all.yml             # Complete cleanup
-├── validate.yml                # Performance validation
+├── quick_install.yml           # Main installation playbook (OS + packages + storage + init)
+├── init.yml                    # Cluster initialization only
+├── dr_setup.yml                # DR setup + hot standby replication
+├── setup_mirrors.yml           # Mirror configuration (same_host/spread/remote)
+├── validate.yml                # Performance validation (gpcheckperf)
+├── health_check.yml            # Cluster health monitoring
+├── failback.yml                # DR failback to primary
+├── cleanup_all.yml             # Multi-site cleanup (requires cleanup_confirm=true)
+├── update_hba.yml              # pg_hba.conf management
+├── update_archiving.yml        # WAL archiving configuration
 ├── requirements.yml            # Ansible collection dependencies
 ├── inventory.yml               # Production inventory template
 ├── test_inventory.yml          # Test/dev inventory
@@ -721,7 +783,8 @@ WarehousePG-Ansible/
     ├── warehousepg-os-config/  # OS tuning
     ├── warehousepg-storage/    # Data directories
     ├── warehousepg-init/       # Cluster initialization
-    ├── warehousepg-dr-setup/   # DR configuration
+    ├── warehousepg-segment-mirrors/    # Segment mirror setup
+    ├── warehousepg-coordinator-standby/ # Coordinator standby
     └── warehousepg-validate/   # Performance validation
 ```
 
@@ -733,7 +796,8 @@ Each role has detailed documentation in its README.md:
 - [warehousepg-os-config](roles/warehousepg-os-config/README.md): OS tuning (sysctl, limits, SELinux, firewall)
 - [warehousepg-storage](roles/warehousepg-storage/README.md): Data directory creation and configuration
 - [warehousepg-init](roles/warehousepg-init/README.md): Cluster initialization with gpinitsystem
-- [warehousepg-dr-setup](roles/warehousepg-dr-setup/README.md): Disaster recovery configuration
+- [warehousepg-segment-mirrors](roles/warehousepg-segment-mirrors/README.md): Segment mirror configuration
+- [warehousepg-coordinator-standby](roles/warehousepg-coordinator-standby/README.md): Coordinator standby setup
 - [warehousepg-validate](roles/warehousepg-validate/README.md): Performance validation with gpcheckperf
 
 ## Architecture Support
